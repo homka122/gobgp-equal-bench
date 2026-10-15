@@ -1,0 +1,34 @@
+| family | mode | variant | CPU, s | alloc/route, B | GC | routes downstream |
+|---|---|---|---|---|---|---|
+| ipv4 | same | base | 1.40 | 6257 | 39 | 0 |
+| ipv4 | same | order | 1.40 | 6257 | 39 | 0 |
+| ipv4 | same | alloc | 1.17 | 5489 | 35 | 0 |
+| ipv4 | same | both | 1.15 | 5489 | 34 | 0 |
+| ipv4 | change | base | 2.32 | 8681 | 63 | 100000 |
+| ipv4 | change | order | 2.30 | 8681 | 64 | 100000 |
+| ipv4 | change | alloc | 2.10 | 7995 | 58 | 100000 |
+| ipv4 | change | both | 2.16 | 7994 | 59 | 100000 |
+| ipv4 | reorder-comm | base | 2.31 | 8682 | 64 | 100000 |
+| ipv4 | reorder-comm | order | 1.40 | 6281 | 39 | 0 |
+| ipv4 | reorder-comm | alloc | 1.85 | 7991 | 58 | 100000 |
+| ipv4 | reorder-comm | both | 1.09 | 5513 | 35 | 0 |
+| ipv4 | reorder-attrs | base | 2.08 | 8721 | 63 | 100000 |
+| ipv4 | reorder-attrs | order | 1.30 | 6257 | 39 | 0 |
+| ipv4 | reorder-attrs | alloc | 1.86 | 8047 | 60 | 100000 |
+| ipv4 | reorder-attrs | both | 1.08 | 5489 | 35 | 0 |
+| vpnv4 | same | base | 1.48 | 7081 | 37 | 0 |
+| vpnv4 | same | order | 1.44 | 7081 | 37 | 0 |
+| vpnv4 | same | alloc | 1.38 | 6409 | 35 | 0 |
+| vpnv4 | same | both | 1.52 | 6409 | 35 | 0 |
+| vpnv4 | change | base | 2.45 | 9307 | 56 | 100000 |
+| vpnv4 | change | order | 2.34 | 9310 | 59 | 100000 |
+| vpnv4 | change | alloc | 2.25 | 8625 | 53 | 100000 |
+| vpnv4 | change | both | 2.37 | 8634 | 55 | 100000 |
+| vpnv4 | reorder-comm | base | 2.25 | 9308 | 59 | 100000 |
+| vpnv4 | reorder-comm | order | 1.54 | 7105 | 37 | 0 |
+| vpnv4 | reorder-comm | alloc | 2.11 | 8619 | 55 | 100000 |
+| vpnv4 | reorder-comm | both | 1.35 | 6433 | 34 | 0 |
+| vpnv4 | reorder-attrs | base | 2.41 | 9337 | 57 | 100000 |
+| vpnv4 | reorder-attrs | order | 1.56 | 7081 | 38 | 0 |
+| vpnv4 | reorder-attrs | alloc | 2.14 | 8644 | 54 | 100000 |
+| vpnv4 | reorder-attrs | both | 1.32 | 6409 | 34 | 0 |

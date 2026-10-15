@@ -21,7 +21,64 @@ osrg/gobgp master `2966efd1`. They touch different files, so the bench builds ea
 
 ## Results
 
-RESULTS_PLACEHOLDER
+Full run in the Docker container: Linux arm64 VM with 4 CPUs on an Apple M2, Go 1.27.2.
+10 000 prefixes re-announced 10 times (100 000 re-announcements), 5 repetitions per cell.
+Raw data, environment and all numbers: [results/full](results/full)
+([summary.md](results/full/summary.md), [env.json](results/full/env.json), [raw/](results/full/raw)).
+
+### Order fix
+
+**When a peer changes the order, base sends every route again; with the fix nothing goes out.**
+This holds for both IPv4 and VPNv4, and whether the communities or the attributes are reordered.
+
+![forwarded routes](results/full/plots/1-forwarded.png)
+
+**gobgpd spends 32–39% less CPU on such a storm.** The route is not re-advertised, so there is
+nothing to build and send downstream.
+
+![CPU in a reorder storm](results/full/plots/2-cpu-reorder.png)
+
+**When the order is stable, the fix costs nothing measurable.**
+Each route in this storm really changes and is sent downstream.
+
+![CPU when nothing is reordered](results/full/plots/3-cpu-change.png)
+
+### Alloc fix
+
+**`Path.Equal` no longer allocates for IPv4/IPv6 routes: 10 → 0 allocations, 292 → 71 ns.**
+VPNv4 gets step 1 only, 12 → 8 allocations and 321 → 153 ns: its NLRI still goes through
+`Serialize`, on purpose, because it carries the label outside the route key.
+
+![Equal micro benchmark](results/full/plots/4-equal-micro.png)
+
+**In a live storm of unchanged routes gobgpd allocates 12% less per route on IPv4 and 9% less on
+VPNv4.** It also runs fewer GC cycles and spends less CPU (−16% on IPv4).
+
+The share is modest because `Equal` is one step of many per UPDATE: the rest is reading and
+parsing the message, the FSM and the tables. The `go test` benchmark of the table chain alone
+(`ProcessMessage → AdjRib → TableManager`) shows the same direction:
+
+| IPv4 | base | alloc | |
+|---|---|---|---|
+| ns/op | 2177 | 1522 | −30% |
+| B/op | 1471 | 944 | −36% |
+| allocs/op | 59 | 39 | −34% |
+
+![alloc storm](results/full/plots/5-alloc-storm.png)
+
+### Together
+
+**The fixes add up.** For reordered routes the order fix removes most of the work, and the alloc
+fix makes the comparison that is left cheaper: 2.31 → 1.09 s CPU on the `reorder-comm` storm.
+
+![all variants](results/full/plots/6-all-variants.png)
+
+### What the fixes do not change
+
+**The memory of the initial load is the same in all variants.** `Path.Equal` is only called when
+a route already exists, so loading a new table does not reach it.
+
+![initial load](results/full/plots/7-initial-load.png)
 
 ## How it works
 

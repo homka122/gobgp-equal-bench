@@ -55,6 +55,10 @@ def bars(ax, groups, variants, value, fmt="{:.0f}", ylabel=""):
     ax.spines[["top", "right"]].set_visible(False)
 
 
+def legend(ax):
+    ax.legend(loc="lower center", bbox_to_anchor=(0.5, 1.0), ncols=5, frameon=False)
+
+
 def save(fig, path, title, caption):
     fig.suptitle(title, fontsize=12, fontweight="bold")
     fig.text(0.5, 0.01, caption, ha="center", fontsize=9, style="italic", wrap=True)
@@ -103,7 +107,7 @@ def main():
     fig, ax = plt.subplots(figsize=(9, 4.5))
     bars(ax, reorder, ["base", "order"], lambda v, k: storm(runs, (v, *k), "sink_nlri"),
          ylabel="routes sent to the downstream peer")
-    ax.legend()
+    legend(ax)
     save(fig, out / "1-forwarded.png", "Same routes, different order: what goes downstream",
          f"The peer re-announces {n['n']} unchanged routes {n['rounds']} times, every other time with the "
          "communities (or the attributes) in another order.")
@@ -112,7 +116,7 @@ def main():
     fig, ax = plt.subplots(figsize=(9, 4.5))
     bars(ax, reorder, ["base", "order"], lambda v, k: storm(runs, (v, *k), "cpu"), fmt="{:.2f}",
          ylabel="gobgpd CPU time, s")
-    ax.legend()
+    legend(ax)
     save(fig, out / "2-cpu-reorder.png", "CPU of gobgpd in the same storm",
          f"{total} re-announcements, every other one reordered. CPU is user + system time of gobgpd.")
 
@@ -121,7 +125,7 @@ def main():
     fig, ax = plt.subplots(figsize=(7, 4.5))
     bars(ax, change, ["base", "order"], lambda v, k: storm(runs, (v, *k), "cpu"), fmt="{:.2f}",
          ylabel="gobgpd CPU time, s")
-    ax.legend()
+    legend(ax)
     save(fig, out / "3-cpu-change.png", "Cost of the order fix when nothing is reordered",
          f"{total} re-announcements in canonical order, each one changes a community and is sent downstream.")
 
@@ -135,7 +139,7 @@ def main():
                                      ["ns per call", "bytes per call", "allocations per call"],
                                      ["{:.0f}", "{:.0f}", "{:.0f}"]):
             bars(ax, eq, mv, lambda v, k: micro.get(v, {}).get(k, {}).get(unit, []), fmt=fmt, ylabel=yl)
-        axs[0].legend()
+        legend(axs[1] if len(axs) == 3 else axs[0])
         save(fig, out / "4-equal-micro.png", "Path.Equal on a re-announced route",
              "go test benchmark: Equal on two received copies of the same route. "
              "Step 1: no copy of the attributes. Step 2: no serialization of IPv4/IPv6 prefixes.")
@@ -148,29 +152,20 @@ def main():
     bars(axs[1], same, ["base", "alloc"], lambda v, k: storm(runs, (v, *k), "num_gc"), ylabel="GC cycles")
     bars(axs[2], same, ["base", "alloc"], lambda v, k: storm(runs, (v, *k), "cpu"), fmt="{:.2f}",
          ylabel="gobgpd CPU time, s")
-    axs[0].legend()
+    legend(axs[1] if len(axs) == 3 else axs[0])
     save(fig, out / "5-alloc-storm.png", "Storm of unchanged re-announcements",
          f"The peer re-announces {n['n']} routes {n['rounds']} times without any change. "
          "Measured in the live gobgpd: memory allocated, GC cycles and CPU for the whole storm.")
 
-    # 6. GC cycles over time, the run with the median CPU
-    fig, axs = plt.subplots(1, 2, figsize=(13, 4.5), sharey=True)
-    for ax, fam in zip(axs, FAMILIES):
-        for v in ["base", "alloc"]:
-            rs = sorted(runs.get((v, fam, "same"), []), key=lambda r: r["storm"]["cpu"])
-            if not rs:
-                continue
-            st = rs[len(rs) // 2]["storm"]
-            ts = [0] + [g[0] for g in st["gc_series"]] + [st["seconds"]]
-            ax.step(ts, list(range(len(ts) - 1)) + [len(ts) - 2], where="post", color=COLORS[v], label=LABELS[v])
-        ax.set_title(fam)
-        ax.set_xlabel("seconds since the storm started")
-        ax.spines[["top", "right"]].set_visible(False)
-    axs[0].set_ylabel("GC cycles so far")
-    axs[0].legend()
-    save(fig, out / "6-gc-timeline.png", "GC cycles of gobgpd during the storm of unchanged routes",
-         "One run per variant (the one with the median CPU), from GODEBUG=gctrace=1. "
-         "Less garbage per route means fewer cycles and an earlier end of the storm.")
+    # 6. all variants in every storm
+    modes = [(m, ("ipv4", m)) for m in ("same", "change", "reorder-comm", "reorder-attrs")]
+    fig, ax = plt.subplots(figsize=(11, 4.5))
+    bars(ax, modes, ["base", "order", "alloc", "both"], lambda v, k: storm(runs, (v, *k), "cpu"), fmt="{:.2f}",
+         ylabel="gobgpd CPU time, s")
+    legend(ax)
+    save(fig, out / "6-all-variants.png", "Both fixes together, IPv4",
+         f"CPU of gobgpd for {total} re-announcements in each mode. The order fix removes the work for "
+         "reordered routes, the alloc fix makes every comparison cheaper.")
 
     # 7. initial load
     variants = ["base", "order", "alloc", "both"]
@@ -183,7 +178,7 @@ def main():
     fig, axs = plt.subplots(1, 2, figsize=(13, 4.5))
     bars(axs[0], fams, variants, load("rss_peak"), ylabel="peak RSS, MiB")
     bars(axs[1], fams, variants, load("total_alloc"), ylabel="allocated during load, MiB")
-    axs[0].legend()
+    legend(axs[1] if len(axs) == 3 else axs[0])
     save(fig, out / "7-initial-load.png", "Initial load of the table",
          f"The peer announces {n['n']} new routes once. Path.Equal is not called for new routes, "
          "so the fixes do not change the memory of the initial load.")

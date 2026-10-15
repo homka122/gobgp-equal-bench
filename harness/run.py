@@ -222,10 +222,10 @@ def write_env(args):
     def out(*cmd, cwd=None):
         return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True).stdout.strip()
 
-    cpu = platform.processor()
+    cpu = platform.machine()
     if Path("/proc/cpuinfo").exists():
         cpu = next((line.split(":", 1)[1].strip() for line in Path("/proc/cpuinfo").read_text().splitlines()
-                    if line.startswith(("model name", "Model"))), cpu) or out("lscpu")
+                    if line.startswith("model name")), cpu)
     env = {
         "date": time.strftime("%Y-%m-%d %H:%M:%S %z"),
         "platform": platform.platform(),
