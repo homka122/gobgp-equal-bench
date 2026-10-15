@@ -4,8 +4,10 @@
 //
 // It reads commands from stdin, one per line:
 //
-//	load        announce all prefixes once, attributes in canonical order
+//	load        announce all prefixes once; in the reorder modes in the
+//	            reordered form, else in canonical order
 //	storm R     re-announce all prefixes R more times according to -mode
+//	mark K      announce the marker route 198.18.K.0/24
 //	quit
 //
 // and prints one JSON line on stdout when a command has been sent.
@@ -86,13 +88,15 @@ func main() {
 		updates := 0
 		switch cmd {
 		case "load":
-			updates = announce(s, fam, nlris, attrs(fam, "same", round))
+			updates = announce(s, fam, nlris, attrs(fam, *mode, round))
 			round++
 		case "storm":
 			for range rounds {
 				updates += announce(s, fam, nlris, attrs(fam, *mode, round))
 				round++
 			}
+		case "mark":
+			updates = announce(s, fam, []bgp.PathNLRI{markerNLRI(fam, rounds)}, attrs(fam, "same", 0))
 		case "quit":
 			s.Close()
 			return
@@ -103,14 +107,35 @@ func main() {
 	}
 }
 
+// markerNLRI is the route the harness sends after a phase. gobgpd handles
+// the UPDATEs of a peer one by one, in the order they come, and sends the
+// result to each peer through a FIFO queue. So when the sink gets the
+// marker, gobgpd has handled every UPDATE before it and sent whatever they
+// caused.
+func markerNLRI(fam bgp.Family, k int) bgp.PathNLRI {
+	p := netip.PrefixFrom(netip.AddrFrom4([4]byte{198, 18, byte(k), 0}), 24)
+	var nlri bgp.NLRI
+	var err error
+	if fam == bgp.RF_IPv4_VPN {
+		nlri, err = bgp.NewLabeledVPNIPAddrPrefix(p, *bgp.NewMPLSLabelStack(label), bgp.NewRouteDistinguisherTwoOctetAS(65000, 1))
+	} else {
+		nlri, err = bgp.NewIPAddrPrefix(p)
+	}
+	if err != nil {
+		log.Fatal(err)
+	}
+	return bgp.PathNLRI{NLRI: nlri}
+}
+
 // attrs returns the path attributes, without the NLRI, for a round. The
-// canonical encoding is sorted by type code with sorted communities.
+// canonical encoding is sorted by type code with sorted communities. The
+// reorder modes use another order on even rounds, the load is round 0.
 func attrs(fam bgp.Family, mode string, round int) []bgp.PathAttributeInterface {
 	comms := []uint32{100<<16 | 1, 100<<16 | 2, 200<<16 | 50}
 	if mode == "change" {
 		comms[2] = 200<<16 | uint32(50+round)
 	}
-	if mode == "reorder-comm" && round%2 == 1 {
+	if mode == "reorder-comm" && round%2 == 0 {
 		slices.Reverse(comms)
 	}
 	a := []bgp.PathAttributeInterface{
@@ -124,7 +149,7 @@ func attrs(fam bgp.Family, mode string, round int) []bgp.PathAttributeInterface 
 		a = append(a, nh)
 	}
 	a = append(a, bgp.NewPathAttributeMultiExitDisc(0), bgp.NewPathAttributeCommunities(comms))
-	if mode == "reorder-attrs" && round%2 == 1 {
+	if mode == "reorder-attrs" && round%2 == 0 {
 		// COMMUNITIES first, the rest in the same order
 		a = append(a[len(a)-1:], a[:len(a)-1]...)
 	}

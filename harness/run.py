@@ -1,12 +1,16 @@
 """Runs gobgpd variants between blaster and sink and records CPU and memory.
 
-One run: start gobgpd and sink, let blaster load the table, wait until
-gobgpd is idle, let blaster re-announce the table `rounds` times, wait again.
+One run: start gobgpd and sink, let blaster load the table, then let blaster
+re-announce the table `rounds` times. A phase ends when the marker route that
+blaster sends after it reaches the sink: gobgpd handles the UPDATEs of a peer
+in order and sends to a peer through a FIFO queue, so by then it has handled
+the whole phase and sent everything the phase caused.
 Nothing polls gobgpd while it works: a /metrics scrape allocates ~160 KiB
 inside gobgpd and would show up in the numbers. Go memory stats are read once
-before and once after a phase, GC cycles come from GODEBUG=gctrace=1 and RSS
-and CPU are read from outside by psutil. Every run is written to
-<out>/raw/<name>.json.
+before and once after a phase (building that page allocates a little in
+gobgpd too; every run records how much as probe_alloc), GC cycles come from
+GODEBUG=gctrace=1 and RSS and CPU are read from outside by psutil. Every run
+is written to <out>/raw/<name>.json.
 """
 
 import argparse
@@ -94,6 +98,11 @@ class Run:
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.log, text=True)
         assert self.reply()["ready"]
         wait_for(lambda: sink()["established"])
+        self.marker = 0
+        # what one memstats() call allocates inside gobgpd; the snapshot
+        # before a phase adds this much to the phase
+        a, b = memstats(), memstats()
+        self.probe_alloc = b["total_alloc"] - a["total_alloc"]
 
     def peer_cpus(self):
         if self.args.peer_cpus and sys.platform == "linux":
@@ -118,21 +127,21 @@ class Run:
         s.update({"sink_" + k: v for k, v in sink().items() if k not in ("last_update_unix_nano", "established")})
         return s
 
-    def wait_idle(self, quiet=2.0, step=0.25, busy=0.04):
-        """Waits until the sink counters stop and gobgpd uses less than `busy`
-        of a CPU. Returns the time and the CPU of the last busy moment, so that
-        the idle wait itself is not counted."""
-        last, cpu, since = None, self.cpu(), time.time()
-        busy_at, busy_cpu = since, cpu
-        while time.time() - since < quiet:
-            time.sleep(step)
-            st = sink()
-            cur, c = (st["nlri"], st["withdrawn"]), self.cpu()
-            if cur != last or c - cpu > busy * step:
-                since = busy_at = time.time()
-                busy_cpu = c
-            last, cpu = cur, c
-        return busy_at, busy_cpu
+    def send(self, command):
+        self.blaster.stdin.write(command + "\n")
+        self.blaster.stdin.flush()
+        return self.reply()
+
+    def wait_marker(self, timeout=600):
+        """Sends the next marker and waits until the sink has it."""
+        self.marker += 1
+        self.send(f"mark {self.marker}")
+        deadline = time.time() + timeout
+        while sink()["marker"] < self.marker:
+            if time.time() > deadline:
+                raise TimeoutError(f"marker {self.marker} did not reach the sink in {timeout}s")
+            time.sleep(0.02)
+        return time.time()
 
     def read_stderr(self):
         for line in self.dut.stderr:
@@ -163,15 +172,12 @@ class Run:
         start = time.time()
         th = threading.Thread(target=sample)
         th.start()
-        self.blaster.stdin.write(command + "\n")
-        self.blaster.stdin.flush()
-        sent = self.reply()
-        end, end_cpu = self.wait_idle()
+        sent = self.send(command)
+        end = self.wait_marker()
+        after = self.snapshot()
         stop.set()
         th.join()
-        after = self.snapshot()
         delta = {k: after[k] - before[k] for k in before if k not in ("rss", "heap_inuse", "time")}
-        delta["cpu"] = end_cpu - before["cpu"]
         delta["seconds"] = end - start
         delta["rss_end"] = after["rss"]
         delta["heap_inuse_end"] = after["heap_inuse"]
@@ -200,22 +206,28 @@ def run_one(variant, family, mode, args):
             raise
         finally:
             r.close()
-    check(load, storm, mode, args)
+    check(load, storm, variant, mode, args)
     return {"variant": variant, "family": family, "mode": mode, "n": args.n, "rounds": args.rounds,
-            "per_update": args.per_update, "load": load, "storm": storm}
+            "per_update": args.per_update, "probe_alloc": r.probe_alloc, "load": load, "storm": storm}
 
 
-def check(load, storm, mode, args):
+# variants with the order fix: reordered routes are not sent again
+ORDER_FIXED = {"order", "both"}
+
+
+def check(load, storm, variant, mode, args):
     """Fails the run if the traffic was not what the scenario says."""
     per_round = -(-args.n // args.per_update)
     assert load["sent_updates"] == per_round, load["sent_updates"]
     assert storm["sent_updates"] == per_round * args.rounds, storm["sent_updates"]
     assert load["sink_nlri"] == args.n, f"sink got {load['sink_nlri']} routes on load, want {args.n}"
-    if mode == "change":
+    for phase in (load, storm):
+        assert phase["sink_withdrawn"] == 0, f"sink got {phase['sink_withdrawn']} withdrawals"
+    if mode == "same" or (mode.startswith("reorder") and variant in ORDER_FIXED):
+        want = 0
+    else:
         want = args.n * args.rounds
-        assert storm["sink_nlri"] == want, f"sink got {storm['sink_nlri']} routes in the storm, want {want}"
-    if mode == "same":
-        assert storm["sink_nlri"] == 0, f"sink got {storm['sink_nlri']} routes for unchanged routes"
+    assert storm["sink_nlri"] == want, f"sink got {storm['sink_nlri']} routes in the storm, want {want}"
 
 
 def write_env(args):

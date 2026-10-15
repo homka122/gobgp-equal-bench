@@ -1,5 +1,7 @@
 // sink is the downstream peer of the gobgpd under test. It counts the routes
-// gobgpd sends it and serves the counters as JSON on -http.
+// gobgpd sends it and serves the counters as JSON on -http. Routes in
+// 198.18.0.0/16 are the markers of blaster: they are not counted, Marker is
+// the highest third octet seen.
 package main
 
 import (
@@ -8,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"net/netip"
+	"slices"
 	"sync"
 	"time"
 
@@ -22,6 +25,24 @@ type stats struct {
 	NLRI        int64 `json:"nlri"`
 	Withdrawn   int64 `json:"withdrawn"`
 	LastUpdate  int64 `json:"last_update_unix_nano"`
+	Marker      int   `json:"marker"`
+}
+
+var markers = netip.MustParsePrefix("198.18.0.0/16")
+
+// marker returns the marker number of nlri, or -1 for a normal route.
+func marker(nlri bgp.NLRI) int {
+	var p netip.Prefix
+	switch n := nlri.(type) {
+	case *bgp.IPAddrPrefix:
+		p = n.Prefix
+	case *bgp.LabeledVPNIPAddrPrefix:
+		p = n.Prefix
+	}
+	if p.IsValid() && markers.Overlaps(p) {
+		return int(p.Addr().As4()[2])
+	}
+	return -1
 }
 
 func main() {
@@ -60,19 +81,29 @@ func main() {
 		if !ok {
 			continue
 		}
-		nlri, withdrawn := len(u.NLRI), len(u.WithdrawnRoutes)
+		reach, unreach := u.NLRI, u.WithdrawnRoutes
 		for _, a := range u.PathAttributes {
 			switch a := a.(type) {
 			case *bgp.PathAttributeMpReachNLRI:
-				nlri += len(a.Value)
+				reach = append(slices.Clip(reach), a.Value...)
 			case *bgp.PathAttributeMpUnreachNLRI:
-				withdrawn += len(a.Value)
+				unreach = append(slices.Clip(unreach), a.Value...)
 			}
 		}
 		mu.Lock()
 		st.Updates++
-		st.NLRI += int64(nlri)
-		st.Withdrawn += int64(withdrawn)
+		for _, n := range reach {
+			if k := marker(n.NLRI); k >= 0 {
+				st.Marker = max(st.Marker, k)
+			} else {
+				st.NLRI++
+			}
+		}
+		for _, n := range unreach {
+			if marker(n.NLRI) < 0 {
+				st.Withdrawn++
+			}
+		}
 		st.LastUpdate = time.Now().UnixNano()
 		mu.Unlock()
 	}

@@ -63,6 +63,30 @@ func BenchmarkStandEqual(b *testing.B) {
 	}
 }
 
+// ProcessMessage on an UPDATE with one prefix, the worst case for the order
+// fix: it sorts once per UPDATE, and copies COMMUNITIES when they are out of
+// order. This is also the cost of the fix on the initial load.
+func BenchmarkStandProcessMessage(b *testing.B) {
+	reversed := slices.Clone(standComms)
+	slices.Reverse(reversed)
+	for _, f := range standFamilies {
+		for _, c := range []struct {
+			name  string
+			comms []uint32
+		}{{"canonical", standComms}, {"comm-unsorted", reversed}} {
+			b.Run(f.name+"/"+c.name, func(b *testing.B) {
+				msg := standMsg(f.fam, 1, c.comms)
+				peer := peerR2()
+				now := time.Now()
+				b.ReportAllocs()
+				for range b.N {
+					_ = ProcessMessage(msg, peer, now, false)
+				}
+			})
+		}
+	}
+}
+
 // Re-announcements of routes already in the table:
 // UPDATE -> ProcessMessage -> AdjRib -> TableManager.
 func BenchmarkStandStorm(b *testing.B) {

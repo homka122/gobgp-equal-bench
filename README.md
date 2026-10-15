@@ -33,12 +33,12 @@ This holds for both IPv4 and VPNv4, and whether the communities or the attribute
 
 ![forwarded routes](results/full/plots/1-forwarded.png)
 
-**gobgpd spends 33–44% less CPU on such a storm.** The route is not re-advertised, so there is
+**gobgpd spends 40–45% less CPU on such a storm.** The route is not re-advertised, so there is
 nothing to build and send downstream.
 
 ![CPU in a reorder storm](results/full/plots/2-cpu-reorder.png)
 
-**When the order is stable, the fix costs nothing measurable: 2.14 → 2.15 s on IPv4, 2.13 → 2.14 s on VPNv4.**
+**When the order is stable, the fix costs nothing measurable: 1.82 → 1.82 s on IPv4, 2.25 → 2.33 s on VPNv4 (overlapping ranges).**
 Each route in this storm really changes and is sent downstream.
 
 ![CPU when nothing is reordered](results/full/plots/3-cpu-change.png)
@@ -46,7 +46,7 @@ Each route in this storm really changes and is sent downstream.
 ### Alloc fix
 
 **`Path.Equal` no longer allocates for IPv4/IPv6 routes: 10 → 0 allocations, 179 → 14 ns.**
-VPNv4 gets step 1 only, 12 → 8 allocations and 216 → 105 ns: its NLRI still goes through
+VPNv4 gets step 1 only, 12 → 8 allocations and 214 → 105 ns: its NLRI still goes through
 `Serialize`, on purpose, because it carries the label outside the route key.
 
 ![Equal micro benchmark](results/full/plots/4-equal-micro.png)
@@ -54,7 +54,7 @@ VPNv4 gets step 1 only, 12 → 8 allocations and 216 → 105 ns: its NLRI still 
 **In a live storm of unchanged routes gobgpd allocates 11% less per route on IPv4 and 8.5% less
 on VPNv4, with a few GC cycles fewer.** The allocation drop is the same in every run. The CPU
 effect is smaller than the run-to-run noise of a live process: the medians are lower in most
-storms (IPv4: −9% unchanged, −11% `change`), but the min–max ranges of base and alloc overlap.
+storms (unchanged routes: IPv4 −7%, VPNv4 −19%), but the min–max ranges of base and alloc overlap.
 
 The share is modest because `Equal` is one step of many per UPDATE: the rest is reading and
 parsing the message, the FSM and the tables. The `go test` benchmark of the table chain alone
@@ -62,7 +62,7 @@ parsing the message, the FSM and the tables. The `go test` benchmark of the tabl
 
 | IPv4 | base | alloc | |
 |---|---|---|---|
-| ns/op | 1646 | 1216 | −26% |
+| ns/op | 1639 | 1240 | −24% |
 | B/op | 1439 | 976 | −32% |
 | allocs/op | 58 | 38 | −34% |
 
@@ -71,15 +71,29 @@ parsing the message, the FSM and the tables. The `go test` benchmark of the tabl
 ### Together
 
 **The fixes add up.** For reordered routes the order fix removes most of the work, and the alloc
-fix makes the comparison that is left cheaper: 1.92 → 1.16 s CPU on the IPv4 `reorder-comm` storm,
-1.97 → 0.98 s on `reorder-attrs`.
+fix makes the comparison that is left cheaper: 1.94 → 1.04 s CPU on the IPv4 `reorder-comm` storm,
+2.01 → 0.94 s on `reorder-attrs`.
 
 ![all variants](results/full/plots/6-all-variants.png)
 
 ### What the fixes do not change
 
-**The memory of the initial load is the same in all variants.** `Path.Equal` is only called when
-a route already exists, so loading a new table does not reach it.
+**The memory of the initial load is the same in all variants, within 0.3%, both when the table
+comes in canonical order and when it comes reordered.** `Path.Equal` is only called when a route
+already exists, so the alloc fix does not touch the load.
+
+The order fix does cost something on a reordered load: it copies a COMMUNITIES attribute that is
+out of order, once per UPDATE. The `go test` benchmark of `ProcessMessage` on an UPDATE with one
+prefix:
+
+| IPv4, one prefix per UPDATE | base | order fix |
+|---|---|---|
+| canonical order | 368 ns, 480 B, 19 allocs | 386 ns, 480 B, 19 allocs |
+| communities out of order | 367 ns, 480 B, 19 allocs | 418 ns, 528 B, 21 allocs |
+
+That is 48 B per UPDATE, ~0.5 MiB for the 10 000 UPDATEs of this load, which is within the
+run-to-run spread of the live numbers. With more prefixes per UPDATE the cost is shared by all
+of them.
 
 ![initial load](results/full/plots/7-initial-load.png)
 
@@ -88,7 +102,8 @@ a route already exists, so loading a new table does not reach it.
 [results/2966efd1](results/2966efd1) is the same full run on the previous upstream master
 `2966efd1`, before upstream moved the next hop out of the path attributes. The commits it used are
 kept under the tag [`bench-base-2966efd1`](https://github.com/homka122/gobgp/tree/bench-base-2966efd1).
-The picture is the same.
+It was measured with an earlier harness that ended a phase on a quiet period instead of the
+marker route and checked less of the traffic. The picture is the same.
 
 ## How it works
 
@@ -104,21 +119,28 @@ AS 100            AS 200                  AS 300
   - `change`: one community value changes every round, so every route really changes;
   - `reorder-comm`: every other round the communities come in reverse order;
   - `reorder-attrs`: every other round COMMUNITIES comes before the other attributes.
+
+  In the two reorder modes the initial load already uses the reordered form.
 - **sink** is the downstream peer: it counts the routes gobgpd sends it.
 - **gobgpd** is the variant under test. In the container it is pinned to CPUs 0–1 with
   `GOMAXPROCS=2`; blaster and sink run on CPUs 2–3.
-- **harness/run.py** runs one variant per run: start, load the table, wait until gobgpd is idle,
-  run the storm, wait again. It reads:
+- **harness/run.py** runs one variant per run: start, load the table, run the storm. A phase ends
+  when a marker route that blaster sends right after it reaches the sink. gobgpd handles the
+  UPDATEs of a peer one by one in the receive loop and sends to a peer through a FIFO queue, so
+  the marker arrives only after gobgpd has handled the whole phase and sent everything it caused.
+  It reads:
   - CPU (user + system) and RSS of gobgpd from outside with psutil;
   - `runtime.MemStats` from the pprof page of gobgpd, once before and once after each phase;
   - every GC cycle from `GODEBUG=gctrace=1`.
 
   Nothing polls gobgpd while it works: one `/metrics` scrape allocates ~160 KiB inside gobgpd and
-  would be counted as its garbage. CPU is counted up to the last moment gobgpd was busy, not
-  including the idle wait.
+  would be counted as its garbage. The pprof page read before a phase also allocates in gobgpd
+  when it builds the heap profile; every run measures this as `probe_alloc` (median 37 KiB, at most 50 KiB per phase), which is
+  counted in the phase and is far below the differences shown.
 
-  The run fails if blaster did not send exactly what the mode says, if the sink did not get all N
-  routes on load, or if it did not get exactly N×R routes in `change` mode or 0 in `same` mode.
+  The run fails unless blaster sent exactly what the mode says, the sink got all N routes on
+  load, no withdrawals at all, and exactly the expected routes in the storm: N×R in `change`,
+  0 in `same`, and in the reorder modes N×R without the order fix and 0 with it.
 - Variants are interleaved in a shuffled order within every repetition, so drift of the machine
   is not mistaken for a difference between variants. Each chart shows the median over the
   repetitions, with min–max whiskers.

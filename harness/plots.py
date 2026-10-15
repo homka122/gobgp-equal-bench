@@ -167,21 +167,22 @@ def main():
          f"CPU of gobgpd for {total} re-announcements in each mode. The order fix removes the work for "
          "reordered routes, the alloc fix makes every comparison cheaper.")
 
-    # 7. initial load
+    # 7. initial load, in canonical order and reordered
     variants = ["base", "order", "alloc", "both"]
-    fams = [(fam, fam) for fam in FAMILIES]
+    loads = [(f"{fam}\ncanonical", (fam, ("same", "change"))) for fam in FAMILIES] + \
+            [(f"{fam}\nreordered", (fam, ("reorder-comm", "reorder-attrs"))) for fam in FAMILIES]
 
     def load(field):
-        return lambda v, fam: [r["load"][field] / 2**20 for (vv, f, _), rs in runs.items()
-                               if vv == v and f == fam for r in rs]
+        return lambda v, k: [r["load"][field] / 2**20 for (vv, f, m), rs in runs.items()
+                             if vv == v and f == k[0] and m in k[1] for r in rs]
 
-    fig, axs = plt.subplots(1, 2, figsize=(13, 4.5))
-    bars(axs[0], fams, variants, load("rss_peak"), ylabel="peak RSS, MiB")
-    bars(axs[1], fams, variants, load("total_alloc"), ylabel="allocated during load, MiB")
-    legend(axs[1] if len(axs) == 3 else axs[0])
+    fig, axs = plt.subplots(1, 2, figsize=(14, 4.5))
+    bars(axs[0], loads, variants, load("rss_peak"), ylabel="peak RSS, MiB")
+    bars(axs[1], loads, variants, load("total_alloc"), ylabel="allocated during load, MiB")
+    legend(axs[0])
     save(fig, out / "7-initial-load.png", "Initial load of the table",
-         f"The peer announces {n['n']} new routes once. Path.Equal is not called for new routes, "
-         "so the fixes do not change the memory of the initial load.")
+         f"The peer announces {n['n']} new routes once, one per UPDATE: in canonical order, or with the "
+         "communities or the attributes reordered. Path.Equal is not called for new routes.")
 
     # summary table
     summary.append("| family | mode | variant | CPU, s | alloc/route, B | GC | routes downstream |")
