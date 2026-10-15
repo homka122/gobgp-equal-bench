@@ -1,0 +1,5 @@
+[project]
+name = "gobgp-equal-bench-harness"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = ["psutil>=5.9", "matplotlib>=3.8"]

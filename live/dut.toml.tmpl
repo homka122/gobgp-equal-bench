@@ -1,0 +1,27 @@
+# gobgpd under test: AS 200 between blaster (AS 100) and sink (AS 300).
+# Both peers connect to it.
+[global.config]
+  as = 200
+  router-id = "2.2.2.2"
+  port = 10179
+  local-address-list = ["127.0.0.1", "{sink_addr}"]
+
+[[neighbors]]
+  [neighbors.config]
+    neighbor-address = "127.0.0.1"
+    peer-as = 100
+  [neighbors.transport.config]
+    passive-mode = true
+  [[neighbors.afi-safis]]
+    [neighbors.afi-safis.config]
+      afi-safi-name = "{family}"
+
+[[neighbors]]
+  [neighbors.config]
+    neighbor-address = "{sink_addr}"
+    peer-as = 300
+  [neighbors.transport.config]
+    passive-mode = true
+  [[neighbors.afi-safis]]
+    [neighbors.afi-safis.config]
+      afi-safi-name = "{family}"
