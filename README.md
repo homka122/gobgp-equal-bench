@@ -1,11 +1,15 @@
 # gobgp Path.Equal bench
 
 Measures two fixes to [GoBGP](https://github.com/osrg/gobgp) on a live gobgpd
-([PR](https://github.com/homka122/gobgp/pull/1)):
+([PR](https://github.com/homka122/gobgp/pull/1)). Both are about the check gobgpd runs for every
+re-announced route: `Path.Equal`, "is this the same route I already have?". If it says no, the
+route gets a new age and is sent again to every peer.
 
-- **order**: the same route re-announced with its attributes or communities in another order no
-  longer counts as changed, so it is not sent again to every peer.
-- **alloc**: `Path.Equal`, which runs twice per received route, no longer allocates.
+- **order**: the attributes hash covered the attributes in the order they came in, so the same
+  route with its attributes or communities in another order counted as changed. Received
+  attributes and COMMUNITIES are now sorted before hashing.
+- **alloc**: `Path.Equal` copied the attributes of both routes and serialized both prefixes on
+  every call. It now reads the attributes in place and compares IP prefixes as values.
 
 ## Result
 
@@ -30,6 +34,23 @@ More charts: [CPU in a reorder storm](results/full/plots/2-cpu-reorder.png),
 [storm of unchanged routes](results/full/plots/5-alloc-storm.png),
 [initial load](results/full/plots/7-initial-load.png).
 All numbers: [summary.md](results/full/summary.md), raw data: [results/full](results/full).
+
+## `Path.Equal` allocations
+
+`go test`, one call on two received copies of the same route. `Path.Equal` runs twice per received
+route (Adj-RIB-In and the main table), so a re-announcement saves twice this.
+
+| | ns | bytes | allocations |
+|---|---|---|---|
+| IPv4, base | 178 | 224 | 10 |
+| IPv4, attributes read in place | 70 | 32 | 6 |
+| IPv4, + prefixes compared as values | **9** | **0** | **0** |
+| VPNv4, base | 216 | 256 | 12 |
+| VPNv4, alloc fix | 106 | 64 | 8 |
+
+VPNv4 keeps 8 allocations on purpose: its prefix carries an MPLS label outside the route key, so it
+is still compared by its serialized bytes. For the whole receive chain
+(`ProcessMessage → AdjRib → TableManager`, IPv4) the allocations per re-announcement go from 58 to 38.
 
 ## How it works
 
