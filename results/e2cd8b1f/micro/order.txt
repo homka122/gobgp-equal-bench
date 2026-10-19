@@ -1,0 +1,103 @@
+goos: linux
+goarch: arm64
+pkg: github.com/osrg/gobgp/v4/internal/pkg/table
+BenchmarkStandEqual/ipv4-4       	 6395406	       179.8 ns/op	     224 B/op	      10 allocs/op
+BenchmarkStandEqual/vpnv4-4      	 5024163	       215.0 ns/op	     256 B/op	      12 allocs/op
+BenchmarkStandProcessMessage/ipv4/canonical-4         	 3103588	       386.0 ns/op	     480 B/op	      19 allocs/op
+BenchmarkStandProcessMessage/ipv4/comm-unsorted-4     	 2882563	       423.4 ns/op	     528 B/op	      21 allocs/op
+BenchmarkStandProcessMessage/vpnv4/canonical-4        	 2404963	       564.3 ns/op	     520 B/op	      22 allocs/op
+BenchmarkStandProcessMessage/vpnv4/comm-unsorted-4    	 2218270	       528.0 ns/op	     568 B/op	      24 allocs/op
+BenchmarkStandStorm/ipv4/same-4                       	  622188	      1751 ns/op	         0 changed/op	    1439 B/op	      58 allocs/op
+BenchmarkStandStorm/ipv4/reorder-comm-4               	  582430	      1912 ns/op	         0 changed/op	    1463 B/op	      58 allocs/op
+BenchmarkStandStorm/vpnv4/same-4                      	  438450	      2436 ns/op	         0 changed/op	    1736 B/op	      79 allocs/op
+BenchmarkStandStorm/vpnv4/reorder-comm-4              	  440109	      2376 ns/op	         0 changed/op	    1760 B/op	      80 allocs/op
+BenchmarkStandEqual/ipv4-4       	 6637714	       178.1 ns/op	     224 B/op	      10 allocs/op
+BenchmarkStandEqual/vpnv4-4      	 5476876	       217.9 ns/op	     256 B/op	      12 allocs/op
+BenchmarkStandProcessMessage/ipv4/canonical-4         	 3091116	       386.5 ns/op	     480 B/op	      19 allocs/op
+BenchmarkStandProcessMessage/ipv4/comm-unsorted-4     	 2888268	       416.4 ns/op	     528 B/op	      21 allocs/op
+BenchmarkStandProcessMessage/vpnv4/canonical-4        	 2419896	       492.8 ns/op	     520 B/op	      22 allocs/op
+BenchmarkStandProcessMessage/vpnv4/comm-unsorted-4    	 2268568	       530.4 ns/op	     568 B/op	      24 allocs/op
+BenchmarkStandStorm/ipv4/same-4                       	  622880	      1729 ns/op	         0 changed/op	    1439 B/op	      58 allocs/op
+BenchmarkStandStorm/ipv4/reorder-comm-4               	  628788	      1744 ns/op	         0 changed/op	    1463 B/op	      58 allocs/op
+BenchmarkStandStorm/vpnv4/same-4                      	  481269	      2283 ns/op	         0 changed/op	    1736 B/op	      79 allocs/op
+BenchmarkStandStorm/vpnv4/reorder-comm-4              	  488355	      2341 ns/op	         0 changed/op	    1759 B/op	      79 allocs/op
+BenchmarkStandEqual/ipv4-4       	 6886352	       173.2 ns/op	     224 B/op	      10 allocs/op
+BenchmarkStandEqual/vpnv4-4      	 5769144	       208.4 ns/op	     256 B/op	      12 allocs/op
+BenchmarkStandProcessMessage/ipv4/canonical-4         	 3146254	       376.9 ns/op	     480 B/op	      19 allocs/op
+BenchmarkStandProcessMessage/ipv4/comm-unsorted-4     	 2965600	       407.6 ns/op	     528 B/op	      21 allocs/op
+BenchmarkStandProcessMessage/vpnv4/canonical-4        	 2472446	       484.4 ns/op	     520 B/op	      22 allocs/op
+BenchmarkStandProcessMessage/vpnv4/comm-unsorted-4    	 2311077	       518.0 ns/op	     568 B/op	      24 allocs/op
+BenchmarkStandStorm/ipv4/same-4                       	  747626	      1441 ns/op	         0 changed/op	    1439 B/op	      58 allocs/op
+BenchmarkStandStorm/ipv4/reorder-comm-4               	  740824	      1492 ns/op	         0 changed/op	    1463 B/op	      58 allocs/op
+BenchmarkStandStorm/vpnv4/same-4                      	  559375	      2026 ns/op	         0 changed/op	    1736 B/op	      79 allocs/op
+BenchmarkStandStorm/vpnv4/reorder-comm-4              	  553320	      2045 ns/op	         0 changed/op	    1759 B/op	      79 allocs/op
+BenchmarkStandEqual/ipv4-4       	 6724424	       178.4 ns/op	     224 B/op	      10 allocs/op
+BenchmarkStandEqual/vpnv4-4      	 5623059	       214.8 ns/op	     256 B/op	      12 allocs/op
+BenchmarkStandProcessMessage/ipv4/canonical-4         	 3114022	       386.2 ns/op	     480 B/op	      19 allocs/op
+BenchmarkStandProcessMessage/ipv4/comm-unsorted-4     	 2877238	       420.9 ns/op	     528 B/op	      21 allocs/op
+BenchmarkStandProcessMessage/vpnv4/canonical-4        	 2444394	       492.4 ns/op	     520 B/op	      22 allocs/op
+BenchmarkStandProcessMessage/vpnv4/comm-unsorted-4    	 2258430	       529.9 ns/op	     568 B/op	      24 allocs/op
+BenchmarkStandStorm/ipv4/same-4                       	  723613	      1535 ns/op	         0 changed/op	    1439 B/op	      58 allocs/op
+BenchmarkStandStorm/ipv4/reorder-comm-4               	  712503	      1567 ns/op	         0 changed/op	    1463 B/op	      58 allocs/op
+BenchmarkStandStorm/vpnv4/same-4                      	  537127	      2057 ns/op	         0 changed/op	    1736 B/op	      79 allocs/op
+BenchmarkStandStorm/vpnv4/reorder-comm-4              	  545085	      2098 ns/op	         0 changed/op	    1759 B/op	      79 allocs/op
+BenchmarkStandEqual/ipv4-4       	 6645824	       177.5 ns/op	     224 B/op	      10 allocs/op
+BenchmarkStandEqual/vpnv4-4      	 5592082	       217.9 ns/op	     256 B/op	      12 allocs/op
+BenchmarkStandProcessMessage/ipv4/canonical-4         	 3028238	       388.5 ns/op	     480 B/op	      19 allocs/op
+BenchmarkStandProcessMessage/ipv4/comm-unsorted-4     	 2850362	       418.2 ns/op	     528 B/op	      21 allocs/op
+BenchmarkStandProcessMessage/vpnv4/canonical-4        	 2438520	       490.9 ns/op	     520 B/op	      22 allocs/op
+BenchmarkStandProcessMessage/vpnv4/comm-unsorted-4    	 2270898	       530.2 ns/op	     568 B/op	      24 allocs/op
+BenchmarkStandStorm/ipv4/same-4                       	  822854	      1464 ns/op	         0 changed/op	    1439 B/op	      58 allocs/op
+BenchmarkStandStorm/ipv4/reorder-comm-4               	  725080	      1507 ns/op	         0 changed/op	    1463 B/op	      58 allocs/op
+BenchmarkStandStorm/vpnv4/same-4                      	  548737	      2038 ns/op	         0 changed/op	    1736 B/op	      79 allocs/op
+BenchmarkStandStorm/vpnv4/reorder-comm-4              	  521468	      2066 ns/op	         0 changed/op	    1760 B/op	      79 allocs/op
+BenchmarkStandEqual/ipv4-4       	 6735105	       180.8 ns/op	     224 B/op	      10 allocs/op
+BenchmarkStandEqual/vpnv4-4      	 5627983	       214.7 ns/op	     256 B/op	      12 allocs/op
+BenchmarkStandProcessMessage/ipv4/canonical-4         	 3086007	       387.5 ns/op	     480 B/op	      19 allocs/op
+BenchmarkStandProcessMessage/ipv4/comm-unsorted-4     	 2899281	       417.4 ns/op	     528 B/op	      21 allocs/op
+BenchmarkStandProcessMessage/vpnv4/canonical-4        	 2359923	       493.7 ns/op	     520 B/op	      22 allocs/op
+BenchmarkStandProcessMessage/vpnv4/comm-unsorted-4    	 2273072	       530.3 ns/op	     568 B/op	      24 allocs/op
+BenchmarkStandStorm/ipv4/same-4                       	  726844	      1753 ns/op	         0 changed/op	    1439 B/op	      58 allocs/op
+BenchmarkStandStorm/ipv4/reorder-comm-4               	  610194	      1852 ns/op	         0 changed/op	    1463 B/op	      58 allocs/op
+BenchmarkStandStorm/vpnv4/same-4                      	  434391	      2328 ns/op	         0 changed/op	    1736 B/op	      79 allocs/op
+BenchmarkStandStorm/vpnv4/reorder-comm-4              	  538096	      2055 ns/op	         0 changed/op	    1759 B/op	      79 allocs/op
+BenchmarkStandEqual/ipv4-4       	 6330014	       180.4 ns/op	     224 B/op	      10 allocs/op
+BenchmarkStandEqual/vpnv4-4      	 5597878	       215.6 ns/op	     256 B/op	      12 allocs/op
+BenchmarkStandProcessMessage/ipv4/canonical-4         	 3113995	       385.5 ns/op	     480 B/op	      19 allocs/op
+BenchmarkStandProcessMessage/ipv4/comm-unsorted-4     	 2849523	       421.5 ns/op	     528 B/op	      21 allocs/op
+BenchmarkStandProcessMessage/vpnv4/canonical-4        	 2420726	       499.2 ns/op	     520 B/op	      22 allocs/op
+BenchmarkStandProcessMessage/vpnv4/comm-unsorted-4    	 2293362	       528.1 ns/op	     568 B/op	      24 allocs/op
+BenchmarkStandStorm/ipv4/same-4                       	  623091	      1607 ns/op	         0 changed/op	    1439 B/op	      58 allocs/op
+BenchmarkStandStorm/ipv4/reorder-comm-4               	  640752	      1623 ns/op	         0 changed/op	    1463 B/op	      58 allocs/op
+BenchmarkStandStorm/vpnv4/same-4                      	  528651	      2124 ns/op	         0 changed/op	    1736 B/op	      79 allocs/op
+BenchmarkStandStorm/vpnv4/reorder-comm-4              	  514369	      2154 ns/op	         0 changed/op	    1759 B/op	      79 allocs/op
+BenchmarkStandEqual/ipv4-4       	 6677430	       177.8 ns/op	     224 B/op	      10 allocs/op
+BenchmarkStandEqual/vpnv4-4      	 5539806	       212.7 ns/op	     256 B/op	      12 allocs/op
+BenchmarkStandProcessMessage/ipv4/canonical-4         	 3129110	       387.0 ns/op	     480 B/op	      19 allocs/op
+BenchmarkStandProcessMessage/ipv4/comm-unsorted-4     	 2876596	       416.5 ns/op	     528 B/op	      21 allocs/op
+BenchmarkStandProcessMessage/vpnv4/canonical-4        	 2432125	       490.8 ns/op	     520 B/op	      22 allocs/op
+BenchmarkStandProcessMessage/vpnv4/comm-unsorted-4    	 2258894	       524.7 ns/op	     568 B/op	      24 allocs/op
+BenchmarkStandStorm/ipv4/same-4                       	  623367	      1607 ns/op	         0 changed/op	    1439 B/op	      58 allocs/op
+BenchmarkStandStorm/ipv4/reorder-comm-4               	  730534	      1647 ns/op	         0 changed/op	    1463 B/op	      58 allocs/op
+BenchmarkStandStorm/vpnv4/same-4                      	  523071	      2118 ns/op	         0 changed/op	    1736 B/op	      79 allocs/op
+BenchmarkStandStorm/vpnv4/reorder-comm-4              	  517693	      2161 ns/op	         0 changed/op	    1759 B/op	      79 allocs/op
+BenchmarkStandEqual/ipv4-4       	 6676263	       179.3 ns/op	     224 B/op	      10 allocs/op
+BenchmarkStandEqual/vpnv4-4      	 5618564	       215.7 ns/op	     256 B/op	      12 allocs/op
+BenchmarkStandProcessMessage/ipv4/canonical-4         	 3082287	       386.5 ns/op	     480 B/op	      19 allocs/op
+BenchmarkStandProcessMessage/ipv4/comm-unsorted-4     	 2860635	       417.7 ns/op	     528 B/op	      21 allocs/op
+BenchmarkStandProcessMessage/vpnv4/canonical-4        	 2417341	       492.6 ns/op	     520 B/op	      22 allocs/op
+BenchmarkStandProcessMessage/vpnv4/comm-unsorted-4    	 2259988	       529.5 ns/op	     568 B/op	      24 allocs/op
+BenchmarkStandStorm/ipv4/same-4                       	  637290	      1701 ns/op	         0 changed/op	    1439 B/op	      58 allocs/op
+BenchmarkStandStorm/ipv4/reorder-comm-4               	  594428	      1716 ns/op	         0 changed/op	    1463 B/op	      58 allocs/op
+BenchmarkStandStorm/vpnv4/same-4                      	  524697	      2184 ns/op	         0 changed/op	    1736 B/op	      79 allocs/op
+BenchmarkStandStorm/vpnv4/reorder-comm-4              	  494898	      2216 ns/op	         0 changed/op	    1759 B/op	      79 allocs/op
+BenchmarkStandEqual/ipv4-4       	 6612673	       179.3 ns/op	     224 B/op	      10 allocs/op
+BenchmarkStandEqual/vpnv4-4      	 5600181	       214.9 ns/op	     256 B/op	      12 allocs/op
+BenchmarkStandProcessMessage/ipv4/canonical-4         	 3062865	       389.0 ns/op	     480 B/op	      19 allocs/op
+BenchmarkStandProcessMessage/ipv4/comm-unsorted-4     	 2882013	       418.8 ns/op	     528 B/op	      21 allocs/op
+BenchmarkStandProcessMessage/vpnv4/canonical-4        	 2425652	       492.3 ns/op	     520 B/op	      22 allocs/op
+BenchmarkStandProcessMessage/vpnv4/comm-unsorted-4    	 2260729	       530.5 ns/op	     568 B/op	      24 allocs/op
+BenchmarkStandStorm/ipv4/same-4                       	  629478	      1705 ns/op	         0 changed/op	    1439 B/op	      58 allocs/op
+BenchmarkStandStorm/ipv4/reorder-comm-4               	  632844	      1738 ns/op	         0 changed/op	    1463 B/op	      58 allocs/op
+BenchmarkStandStorm/vpnv4/same-4                      	  480932	      2300 ns/op	         0 changed/op	    1736 B/op	      79 allocs/op
+BenchmarkStandStorm/vpnv4/reorder-comm-4              	  489798	      2397 ns/op	         0 changed/op	    1759 B/op	      79 allocs/op

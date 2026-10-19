@@ -5,15 +5,16 @@ that affect how a re-announced route is compared with the one already in the tab
 
 | Fix | Commits | What it does |
 |---|---|---|
-| **order** | [`6d84b07b`](https://github.com/homka122/gobgp/commit/6d84b07b40adf09c78eaa1da504a305647314ec1) | Sorts the path attributes by type code and the COMMUNITIES values when an UPDATE is received. Before, the same route with its attributes or communities in another order counted as a new route: it got a new age and was sent again to all peers. |
-| **alloc** | [`abc16c2b`](https://github.com/homka122/gobgp/commit/abc16c2bf9f89311b37a74caf49992471d7aff6a), [`7bcb5edd`](https://github.com/homka122/gobgp/commit/7bcb5edd25711bb8ec22b3a5c1619743a1628ad0) | `Path.Equal` without allocations: it reads the attributes without copying them (step 1) and compares IPv4/IPv6 prefixes without serializing them (step 2). |
+| **order** | [`6f6cc2a7`](https://github.com/homka122/gobgp/commit/6f6cc2a78b94ee8092411baca0fa6df48b3c53ce) | Sorts the path attributes by type code and the COMMUNITIES values when an UPDATE is received. Before, the same route with its attributes or communities in another order counted as a new route: it got a new age and was sent again to all peers. |
+| **alloc** | [`127d1ef8`](https://github.com/homka122/gobgp/commit/127d1ef857eebd310285c08b0d7072da20e75079), [`35f6e060`](https://github.com/homka122/gobgp/commit/35f6e0602066ff0a71d7ec956b19157353998a82) | `Path.Equal` without allocations: it reads the attributes without copying them (step 1) and compares IPv4/IPv6 prefixes without serializing them (step 2). |
 
 Both are on the [`path-equal`](https://github.com/homka122/gobgp/tree/path-equal) branch, on top of
-osrg/gobgp master `e2cd8b1f`. They touch different files, so the bench builds each one on its own:
+osrg/gobgp master `e9ac84bf`. The head of the branch, `65721d4e`, differs from the measured `35f6e060`
+only by a removed code comment. The fixes touch different files, so the bench builds each one on its own:
 
 | Variant | Code |
 |---|---|
-| `base` | `e2cd8b1f`, upstream master |
+| `base` | `e9ac84bf`, upstream master |
 | `order` | base + order fix |
 | `alloc1` | base + alloc fix step 1 (micro benchmarks only) |
 | `alloc` | base + alloc fix |
@@ -33,28 +34,28 @@ This holds for both IPv4 and VPNv4, and whether the communities or the attribute
 
 ![forwarded routes](results/full/plots/1-forwarded.png)
 
-**gobgpd spends 40–45% less CPU on such a storm.** The route is not re-advertised, so there is
+**gobgpd spends 34–38% less CPU on such a storm.** The route is not re-advertised, so there is
 nothing to build and send downstream.
 
 ![CPU in a reorder storm](results/full/plots/2-cpu-reorder.png)
 
-**When the order is stable, the fix costs nothing measurable: 1.82 → 1.82 s on IPv4, 2.25 → 2.33 s on VPNv4 (overlapping ranges).**
+**When the order is stable, the fix costs nothing measurable: 1.86 → 1.82 s on IPv4, 2.34 → 2.37 s on VPNv4.**
 Each route in this storm really changes and is sent downstream.
 
 ![CPU when nothing is reordered](results/full/plots/3-cpu-change.png)
 
 ### Alloc fix
 
-**`Path.Equal` no longer allocates for IPv4/IPv6 routes: 10 → 0 allocations, 179 → 14 ns.**
-VPNv4 gets step 1 only, 12 → 8 allocations and 214 → 105 ns: its NLRI still goes through
+**`Path.Equal` no longer allocates for IPv4/IPv6 routes: 10 → 0 allocations, 178 → 9 ns.**
+VPNv4 gets step 1 only, 12 → 8 allocations and 216 → 106 ns: its NLRI still goes through
 `Serialize`, on purpose, because it carries the label outside the route key.
 
 ![Equal micro benchmark](results/full/plots/4-equal-micro.png)
 
 **In a live storm of unchanged routes gobgpd allocates 11% less per route on IPv4 and 8.5% less
 on VPNv4, with a few GC cycles fewer.** The allocation drop is the same in every run. The CPU
-effect is smaller than the run-to-run noise of a live process: the medians are lower in most
-storms (unchanged routes: IPv4 −7%, VPNv4 −19%), but the min–max ranges of base and alloc overlap.
+effect is smaller than the run-to-run noise of a live process: the medians move both ways
+(unchanged routes: IPv4 −14%, VPNv4 +10%), and the min–max ranges of base and alloc overlap.
 
 The share is modest because `Equal` is one step of many per UPDATE: the rest is reading and
 parsing the message, the FSM and the tables. The `go test` benchmark of the table chain alone
@@ -62,7 +63,7 @@ parsing the message, the FSM and the tables. The `go test` benchmark of the tabl
 
 | IPv4 | base | alloc | |
 |---|---|---|---|
-| ns/op | 1639 | 1240 | −24% |
+| ns/op | 1653 | 1138 | −31% |
 | B/op | 1439 | 976 | −32% |
 | allocs/op | 58 | 38 | −34% |
 
@@ -71,8 +72,8 @@ parsing the message, the FSM and the tables. The `go test` benchmark of the tabl
 ### Together
 
 **The fixes add up.** For reordered routes the order fix removes most of the work, and the alloc
-fix makes the comparison that is left cheaper: 1.94 → 1.04 s CPU on the IPv4 `reorder-comm` storm,
-2.01 → 0.94 s on `reorder-attrs`.
+fix makes the comparison that is left cheaper: 2.09 → 1.17 s CPU on the IPv4 `reorder-comm` storm,
+2.17 → 1.07 s on `reorder-attrs`.
 
 ![all variants](results/full/plots/6-all-variants.png)
 
@@ -88,8 +89,8 @@ prefix:
 
 | IPv4, one prefix per UPDATE | base | order fix |
 |---|---|---|
-| canonical order | 368 ns, 480 B, 19 allocs | 386 ns, 480 B, 19 allocs |
-| communities out of order | 367 ns, 480 B, 19 allocs | 418 ns, 528 B, 21 allocs |
+| canonical order | 375 ns, 480 B, 19 allocs | 398 ns, 480 B, 19 allocs |
+| communities out of order | 374 ns, 480 B, 19 allocs | 429 ns, 528 B, 21 allocs |
 
 That is 48 B per UPDATE, ~0.5 MiB for the 10 000 UPDATEs of this load, which is within the
 run-to-run spread of the live numbers. With more prefixes per UPDATE the cost is shared by all
@@ -97,7 +98,12 @@ of them.
 
 ![initial load](results/full/plots/7-initial-load.png)
 
-### Earlier run
+### Earlier runs
+
+[results/e2cd8b1f](results/e2cd8b1f) is the same harness on upstream master `e2cd8b1f`, with an
+earlier version of step 2 that built the serialized bytes of a prefix in an array instead of
+comparing `netip.Prefix` values (tag
+[`bench-base-e2cd8b1f`](https://github.com/homka122/gobgp/tree/bench-base-e2cd8b1f)).
 
 [results/2966efd1](results/2966efd1) is the same full run on the previous upstream master
 `2966efd1`, before upstream moved the next hop out of the path attributes. The commits it used are
@@ -135,7 +141,7 @@ AS 100            AS 200                  AS 300
 
   Nothing polls gobgpd while it works: one `/metrics` scrape allocates ~160 KiB inside gobgpd and
   would be counted as its garbage. The pprof page read before a phase also allocates in gobgpd
-  when it builds the heap profile; every run measures this as `probe_alloc` (median 37 KiB, at most 50 KiB per phase), which is
+  when it builds the heap profile; every run measures this as `probe_alloc` (median 36 KiB, at most 70 KiB per phase), which is
   counted in the phase and is far below the differences shown.
 
   The run fails unless blaster sent exactly what the mode says, the sink got all N routes on
