@@ -2,8 +2,7 @@
 # Builds gobgpd for every variant under test into work/bin/<variant>/gobgpd:
 #   base    upstream master
 #   order   base + attribute order fix
-#   alloc1  base + first allocation commit (micro benchmarks only)
-#   alloc   base + both allocation commits
+#   alloc   base + all allocation commits
 #   both    base + all fixes
 # Each variant is a git worktree in work/variants/<variant>.
 set -euo pipefail
@@ -17,7 +16,7 @@ GIT="git -c user.name=bench -c user.email=bench@localhost -c advice.detachedHead
 if [ ! -d "$SRC" ]; then
 	$GIT clone --quiet --no-checkout "${GOBGP_REPO_LOCAL:-$GOBGP_REPO}" "$SRC"
 fi
-$GIT -C "$SRC" fetch --quiet "${GOBGP_REPO_LOCAL:-$GOBGP_REPO}" "$BASE" "$ORDER" "$ALLOC1" "$ALLOC2" 2>/dev/null ||
+$GIT -C "$SRC" fetch --quiet "${GOBGP_REPO_LOCAL:-$GOBGP_REPO}" "$BASE" "$ORDER" "$ALLOC1" "$ALLOC2" "$ALLOC3" 2>/dev/null ||
 	$GIT -C "$SRC" fetch --quiet "${GOBGP_REPO_LOCAL:-$GOBGP_REPO}"
 
 variant() {
@@ -38,9 +37,8 @@ variant() {
 
 variant base "$BASE"
 variant order "$ORDER"
-variant alloc1 "$BASE" "$ALLOC1"
-variant alloc "$BASE" "$ALLOC1" "$ALLOC2"
-variant both "$ALLOC2"
+variant alloc "$BASE" "$ALLOC1" "$ALLOC2" "$ALLOC3"
+variant both "$ALLOC3"
 
 # blaster and sink use pkg/packet/bgp of the base variant
 (cd live && go build -trimpath -o "$WORK/bin/blaster" ./cmd/blaster && go build -trimpath -o "$WORK/bin/sink" ./cmd/sink)

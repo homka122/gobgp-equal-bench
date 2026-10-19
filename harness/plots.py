@@ -98,6 +98,8 @@ def main():
     out = args.results / "plots"
     out.mkdir(exist_ok=True)
     runs = load_runs(args.results / "raw")
+    global FAMILIES
+    FAMILIES = [f for f in ("ipv4", "vpnv4") if any(k[1] == f for k in runs)]
     n = next(iter(runs.values()))[0]
     total = n["n"] * n["rounds"]
     reorder = [(f"{fam}\n{m}", (fam, m)) for fam in FAMILIES for m in ("reorder-comm", "reorder-attrs")]
@@ -133,7 +135,7 @@ def main():
     micro = parse_micro(args.results / "micro")
     if micro:
         eq = [(fam, f"BenchmarkStandEqual/{fam}") for fam in FAMILIES]
-        mv = ["base", "alloc1", "alloc"]
+        mv = ["base", "alloc"]
         fig, axs = plt.subplots(1, 3, figsize=(13, 4.5))
         for ax, unit, yl, fmt in zip(axs, ["ns/op", "B/op", "allocs/op"],
                                      ["ns per call", "bytes per call", "allocations per call"],
@@ -142,7 +144,7 @@ def main():
         legend(axs[1] if len(axs) == 3 else axs[0])
         save(fig, out / "4-equal-micro.png", "Path.Equal on a re-announced route",
              "go test benchmark: Equal on two received copies of the same route. "
-             "Step 1: no copy of the attributes. Step 2: no serialization of IPv4/IPv6 prefixes.")
+             "The alloc fix reads the attributes in place and compares the prefixes as values.")
 
     # 5. allocations in a storm of unchanged routes
     same = [(fam, (fam, "same")) for fam in FAMILIES]

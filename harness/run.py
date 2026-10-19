@@ -255,7 +255,7 @@ def write_env(args):
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--variants", default="base,order,alloc,both")
-    p.add_argument("--families", default="ipv4,vpnv4")
+    p.add_argument("--families", default="ipv4")
     p.add_argument("--modes", default="same,change,reorder-comm,reorder-attrs")
     p.add_argument("--n", type=int, default=10000)
     p.add_argument("--rounds", type=int, default=10)

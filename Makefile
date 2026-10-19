@@ -15,14 +15,14 @@ build:
 
 quick: OUT = $(CURDIR)/results/quick
 quick:
-	$(PY) micro.py --count 3 --benchtime 200ms --out $(OUT)
+	$(PY) micro.py --count 3 --benchtime 100ms --out $(OUT)
 	$(PY) run.py --n 2000 --rounds 4 --reps 2 --out $(OUT) $(RUN_ARGS)
 	$(PY) plots.py --results $(OUT)
 
 all: OUT = $(CURDIR)/results/full
 all:
 	$(PY) micro.py --count 10 --out $(OUT)
-	$(PY) run.py --n 10000 --rounds 10 --reps 5 --out $(OUT) $(RUN_ARGS)
+	$(PY) run.py --n 10000 --rounds 10 --reps 3 --out $(OUT) $(RUN_ARGS)
 	$(PY) plots.py --results $(OUT)
 
 image:
