@@ -40,17 +40,14 @@ All numbers: [summary.md](results/full/summary.md), raw data: [results/full](res
 `go test`, one call on two received copies of the same route. `Path.Equal` runs twice per received
 route (Adj-RIB-In and the main table), so a re-announcement saves twice this.
 
-| | before | step 1 | after |
-|---|---|---|---|
-| IPv4, ns | 178 | 70 | **9** |
-| IPv4, bytes | 224 | 32 | **0** |
-| IPv4, allocations | 10 | 6 | **0** |
-| VPNv4, ns | 216 | 105 | 106 |
-| VPNv4, bytes | 256 | 64 | 64 |
-| VPNv4, allocations | 12 | 8 | 8 |
-
-Step 1: the attributes are read in place instead of copied. After: also IP prefixes are compared as
-values instead of serialized.
+| | before | after |
+|---|---|---|
+| IPv4, ns | 178 | **9** |
+| IPv4, bytes | 224 | **0** |
+| IPv4, allocations | 10 | **0** |
+| VPNv4, ns | 216 | 106 |
+| VPNv4, bytes | 256 | 64 |
+| VPNv4, allocations | 12 | 8 |
 
 VPNv4 keeps 8 allocations on purpose: its prefix carries an MPLS label outside the route key, so it
 is still compared by its serialized bytes. For the whole receive chain
@@ -121,7 +118,7 @@ and VPNv4 unicast: 4 variants × 4 modes × 2 families × 5 runs = 160 runs.
 
 In the live storms the CPU effect of the alloc fix is within the run-to-run noise; the allocation
 drop is the same in every run. The `go test` chain benchmark on IPv4: 1653 → 1138 ns, 1439 → 976 B,
-58 → 38 allocations per re-announcement. VPNv4 gets step 1 of the alloc fix only: its NLRI carries
+58 → 38 allocations per re-announcement. VPNv4 gets only the in-place read of the attributes: its NLRI carries
 a label outside the route key and is still compared by its serialized bytes.
 
 ### Limitations
