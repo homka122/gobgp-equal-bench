@@ -18,7 +18,7 @@ route gets a new age and is sent again to every peer.
 | Reordered re-announcements sent downstream | 100 000 | **0** |
 | gobgpd CPU in that storm | 2.0–2.2 s | **1.1–1.3 s** (−42…44%) |
 | gobgpd CPU when the order is stable | 1.93 s | 1.89 s |
-| Bytes allocated per unchanged re-announcement | 6193 | **5521** (−11%) |
+| Garbage per re-announcement of an unchanged route, bytes | 6193 | **5521** (−11%) |
 | Memory of the initial load | | no change¹ |
 
 ¹ +0.8% when the communities of every route arrive reversed: the order fix copies them once per UPDATE.
