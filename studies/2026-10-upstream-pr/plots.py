@@ -1,4 +1,8 @@
-"""Draws the charts and a summary table from the results of run.py and micro.py.
+# /// script
+# dependencies = ["matplotlib>=3.8"]
+# ///
+"""Draws the charts and a summary table from the results of run.py and micro.py:
+uv run plots.py --results results/full
 
 Every bar is the median over the repetitions, the whiskers show min and max.
 """
@@ -15,7 +19,6 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
-ROOT = Path(__file__).resolve().parent.parent
 COLORS = {"base": "#9e9e9e", "order": "#1f77b4", "alloc1": "#ffbb78", "alloc": "#ff7f0e", "both": "#2ca02c"}
 LABELS = {"base": "base", "order": "order fix", "alloc1": "alloc fix, step 1", "alloc": "alloc fix", "both": "both fixes"}
 FAMILIES = ["ipv4", "vpnv4"]
@@ -93,7 +96,7 @@ def parse_micro(dir):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--results", type=Path, default=ROOT / "results")
+    p.add_argument("--results", type=Path, required=True)
     args = p.parse_args()
     out = args.results / "plots"
     out.mkdir(exist_ok=True)

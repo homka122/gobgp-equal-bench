@@ -1,5 +1,6 @@
 work/
 results/
+studies/
+.git/
 harness/.venv/
 **/__pycache__/
-.git/

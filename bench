@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# gobgpd bench: see README.md.
+set -euo pipefail
+ROOT=$(cd "$(dirname "$0")" && pwd)
+IMAGE=gobgp-equal-bench
+
+usage() {
+	cat <<'EOF'
+usage:
+  ./bench run GOBGPD SCENARIO.toml... [--name NAME] [--local]
+      Measures the gobgpd binary in every scenario. The results go to
+      results/NAME/<scenario file name>/; NAME defaults to the name of the
+      binary. Runs in Docker; --local runs here (Linux, needs go and uv).
+
+  ./bench compare NAME NAME
+      Compares two results: writes results/NAME..NAME.md.
+
+A scenario is a small file: scenarios/example.toml explains every field.
+EOF
+	exit "${1:-0}"
+}
+
+abs() { echo "$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"; }
+
+run() {
+	local gobgpd="" name="" where=docker scenarios=()
+	while [ $# -gt 0 ]; do
+		case $1 in
+		--name) name=$2; shift ;;
+		--local) where=local ;;
+		-*) usage 1 ;;
+		*) if [ -z "$gobgpd" ]; then gobgpd=$1; else scenarios+=("$1"); fi ;;
+		esac
+		shift
+	done
+	[ -n "$gobgpd" ] && [ ${#scenarios[@]} -gt 0 ] || usage 1
+	[ -f "$gobgpd" ] || { echo "bench: no file $gobgpd" >&2; exit 1; }
+	for s in "${scenarios[@]}"; do
+		[ -f "$s" ] || { echo "bench: no scenario file $s" >&2; exit 1; }
+	done
+	name=${name:-$(basename "$gobgpd")}
+	gobgpd=$(abs "$gobgpd")
+
+	if [ "$where" = docker ]; then
+		docker buildx version >/dev/null 2>&1 || export DOCKER_BUILDKIT=0
+		docker build -q -t "$IMAGE" "$ROOT" >/dev/null
+		mkdir -p "$ROOT/results"
+		for s in "${scenarios[@]}"; do
+			docker run --rm \
+				-v "$gobgpd":/gobgpd:ro \
+				-v "$(abs "$s")":"/scenario/$(basename "$s")":ro \
+				-v "$ROOT/results":/bench/results \
+				-v "$IMAGE-cache":/cache \
+				"$IMAGE" run /gobgpd "/scenario/$(basename "$s")" --name "$name" --local
+		done
+		return
+	fi
+	"$ROOT/scripts/build.sh"
+	for s in "${scenarios[@]}"; do
+		echo "== $(basename "$s" .toml)"
+		(cd "$ROOT/harness" && uv run -q python run.py --gobgpd "$gobgpd" --scenario "$(abs "$s")" \
+			--out "$ROOT/results/$name/$(basename "$s" .toml)")
+	done
+}
+
+case ${1:-} in
+run) shift; run "$@" ;;
+compare)
+	[ $# -eq 3 ] || usage 1
+	(cd "$ROOT/harness" && uv run -q python report.py "$ROOT/results/$2" "$ROOT/results/$3")
+	;;
+-h | --help | help) usage ;;
+*) usage 1 ;;
+esac

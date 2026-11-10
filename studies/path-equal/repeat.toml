@@ -1,0 +1,14 @@
+# A small table announced again and again: are re-announcements of the same
+# route sent on, and what do they cost?
+family      = ["ipv4", "vpnv4"]
+routes      = 10000
+repetitions = 3
+
+[communities]
+standard = 3
+extended = 3
+large    = 3
+
+[storm]
+rounds = 10
+resend = ["same", "changed", "standard-reversed", "extended-reversed", "large-reversed", "attributes-reordered"]

@@ -1,0 +1,44 @@
+# A scenario: what the sender announces to gobgpd and how. This file runs as it
+# is and lists every field with its default; a field you leave out keeps it.
+#
+# family, receivers and storm.resend may hold a list, and [communities] may be
+# written several times as [[communities]]: then every combination runs.
+
+family            = "ipv4"   # ipv4 | vpnv4
+routes            = 10000    # routes in the table
+routes_per_update = 1        # routes packed into one UPDATE message
+receivers         = 1        # peers gobgpd sends the routes on to
+repetitions       = 3        # times every combination runs; the report shows the median
+idle_after_load   = 0        # seconds to wait after the load and then read the memory
+                             # the table keeps; 0: do not
+
+# Community values every route carries.
+[communities]
+standard = 0                 # COMMUNITIES values
+extended = 0                 # extended communities (route targets)
+large    = 0                 # large communities
+order    = "sorted"          # order of the values in the UPDATE: sorted | random | reversed
+
+# After the load the sender announces the same routes again, `rounds` times.
+[storm]
+rounds = 0                   # 0: the load alone
+resend = "same"              # what a round sends for every route:
+                             #   same                  the same bytes
+                             #   changed               another MED: the route really changes
+                             #   standard-reversed     the same route, COMMUNITIES values in reverse order
+                             #   extended-reversed     the same route, extended values in reverse order
+                             #   large-reversed        the same route, large values in reverse order
+                             #   attributes-reordered  the same route, COMMUNITIES before the other attributes
+                             # The last four alternate with the original form from round to round.
+
+# How gobgpd and the test peers run.
+[runtime]
+gomaxprocs          = 2      # GOMAXPROCS of gobgpd
+gogc                = ""     # GOGC of gobgpd, e.g. "400" or "off"; "": the Go default
+gomemlimit          = ""     # GOMEMLIMIT of gobgpd, e.g. "5GiB"; "": none
+gobgpd_cpus         = "0,1"  # CPUs gobgpd is pinned to (Linux only)
+sender_cpus         = "2,3"  # CPUs the sender is pinned to (Linux only)
+receiver_cpus       = "2,3"  # CPUs the receivers are pinned to (Linux only). By default they
+                             # share two CPUs with the sender, which fits a machine with 4;
+                             # with many receivers give them their own, e.g. "4,5"
+cpu_profile_seconds = 0      # length of a CPU profile of gobgpd taken from the load on; 0: none

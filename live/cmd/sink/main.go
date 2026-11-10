@@ -50,6 +50,7 @@ func main() {
 	local := flag.String("local", "::1", "local address")
 	remote := flag.String("remote", "[::1]:10179", "gobgpd address")
 	addr := flag.String("http", "127.0.0.1:10180", "address to serve the counters on")
+	id := flag.String("id", "3.3.3.3", "BGP identifier")
 	flag.Parse()
 	fam := bgp.RF_IPv4_UC
 	if *family == "vpnv4" {
@@ -65,7 +66,7 @@ func main() {
 	})
 	go func() { log.Fatal(http.ListenAndServe(*addr, nil)) }()
 
-	s, err := speaker.Dial(*local, *remote, 300, netip.MustParseAddr("3.3.3.3"), []bgp.Family{fam})
+	s, err := speaker.Dial(*local, *remote, 300, netip.MustParseAddr(*id), []bgp.Family{fam})
 	if err != nil {
 		log.Fatal(err)
 	}

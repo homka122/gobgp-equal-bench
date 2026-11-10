@@ -1,0 +1,9 @@
+# A big table loaded once: does the memory it takes change?
+family          = ["ipv4", "vpnv4"]
+routes          = 100000
+repetitions     = 3
+idle_after_load = 10
+
+[communities]
+standard = 3
+extended = 3

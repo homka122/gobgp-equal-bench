@@ -1,3 +1,9 @@
+# scratch: sources and binaries of the variants, results of your own runs
 work/
+/results/
 __pycache__/
 .venv/
+# large inputs of the studies
+studies/*/*.bundle
+studies/*/goproxy/
+.DS_Store
