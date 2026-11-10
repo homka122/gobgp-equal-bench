@@ -62,3 +62,19 @@ A cell is the median over the repetitions, min–max in brackets. Δ is the diff
 | ipv4 | 10 + 10 + 10, reversed | 1 | changed | storm | 100000 | 100000 | 4.72 (4.72–4.85) | 3.81 (3.74–3.82) | -19% | 2.95 (2.93–2.99) | 2.42 (2.39–2.45) | 1893 | 1233 | -35% | 946 (914–964) | 814 (812–882) | -14% |
 | ipv4 | 0 + 50 + 0, random | 1 | changed | load | 100000 | 100000 | 4.71 (4.62–4.73) | 5.06 (5.02–5.16) | +7.4% | 3.01 (3.00–3.01) | 3.21 (3.20–3.24) | 2060 | 2056 (2056–2059) | -0.2% | 920 (904–931) | 911 (868–959) | -1.0% |
 | ipv4 | 0 + 50 + 0, random | 1 | changed | storm | 100000 | 100000 | 8.62 (7.68–8.88) | 7.06 (6.72–7.26) | -18% | 5.87 (5.12–6.01) | 4.67 (4.56–4.77) | 2884 | 1903 | -34% | 1518 (1506–1633) | 1394 (1372–1407) | -8.2% |
+
+## startup
+
+100000 routes, 1 per UPDATE, 0 storm rounds, 3 and 3 repetitions.
+
+| family | communities | receivers | resend | phase | sent on: before | after | CPU, s: before | after | Δ | wall, s: before | after | allocated, MiB: before | after | Δ | peak RSS, MiB: before | after | Δ |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| ipv4 | 3 + 3 + 0, sorted | 1 | – | load | 100000 | 100000 | 2.69 (2.64–2.71) | 2.67 (2.64–2.70) | -0.7% | 1.77 (1.76–1.77) | 1.76 (1.75–1.76) | 835 | 837 | +0.3% | 310 (309–315) | 319 (309–320) | +2.7% |
+| vpnv4 | 3 + 3 + 0, sorted | 1 | – | load | 100000 | 100000 | 2.80 (2.79–2.81) | 2.74 (2.72–2.78) | -2.1% | 1.83 (1.81–1.84) | 1.81 (1.77–1.81) | 872 | 874 | +0.3% | 352 (343–353) | 349 (348–363) | -0.9% |
+
+Once the load is done: the heap in use after a forced GC, and the RSS after the idle time.
+
+| family | communities | receivers | resend | live heap, MiB: before | after | Δ | settled RSS, MiB: before | after |
+|---|---|---|---|---|---|---|---|---|
+| ipv4 | 3 + 3 + 0, sorted | 1 | – | 151 (150–151) | 149 (148–149) | -1.2% | 307 (231–308) | 315 (234–317) |
+| vpnv4 | 3 + 3 + 0, sorted | 1 | – | 171 (171–172) | 172 (171–173) | +0.8% | 249 (216–259) | 347 (218–359) |

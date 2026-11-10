@@ -1,12 +1,13 @@
 # Path.Equal fix on gobgp v3 (November 2026)
 
 The fix measured on upstream master in [2026-10-upstream-pr](../2026-10-upstream-pr), ported to
-gobgp v3 and measured on a live gobgpd. Two questions:
+gobgp v3 and measured on a live gobgpd. Three questions:
 
 1. When a peer announces a route gobgpd already has, is it sent on again, and what does the
    announcement cost? Scenario [repeat](repeat.toml).
 2. The fix sorts the attributes and community values of every received route. What does that
    cost on the first load of a big table? Scenario [sets](sets.toml).
+3. Does the memory the loaded table takes change? Scenario [startup](startup.toml).
 
 Everything needed to check the numbers is in this directory: the scenarios, the
 [report](results/before..after.md) with min–max for every cell and the raw data of every run in
@@ -81,6 +82,22 @@ UPDATE; 3 repetitions of each.
   allocated, the same peak RSS).
 - **The change** is cheaper with every set: 13–22% less CPU, 18–35% less allocated memory.
 
+## 3. The memory of the loaded table (startup)
+
+A sender announces 100 000 routes once, each with 3 standard and 3 extended communities, and
+then nothing happens for 10 seconds. IPv4 unicast and VPNv4, 3 repetitions of each.
+
+| family | load CPU, s: before | after | Δ | load allocated, MiB: before | after | Δ | peak RSS, MiB: before | after | Δ | live heap, MiB: before | after | Δ |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| ipv4 | 2.69 | 2.67 | −0.7% | 835 | 837 | +0.3% | 310 | 319 | +2.7% | 151 | 149 | −1.2% |
+| vpnv4 | 2.80 | 2.74 | −2.1% | 872 | 874 | +0.3% | 352 | 349 | −0.9% | 171 | 172 | +0.8% |
+
+Nothing changes: the live heap, which is what the table itself takes after a forced GC, is within
+1% for both families, and so are the CPU and the allocated memory of the load. The peak RSS
+differences are inside the min–max ranges. The RSS after the idle time is in the report too, but
+it varies by 80–140 MiB between repetitions of one binary, depending on when the Go runtime
+returns memory to the system, so it shows nothing here.
+
 ## Code under test
 
 Two gobgpd 3.24.0 binaries built from a gobgp v3 tree that is not public, with the same Go
@@ -103,9 +120,10 @@ With two gobgpd binaries of your own, from the root of the repository:
 ./bench compare before after      # results/before..after.md
 ```
 
-About 3 minutes per binary. The results here were made by the stand as it is in the commit that
+About 5 minutes per binary. The results here were made by the stand as it is in the commit that
 added them: `before` and `after` one right after the other, then `after2` and `before2`,
-the sets scenario alone in the opposite order.
+the sets scenario alone in the opposite order. The startup scenario was run separately,
+`before` and then `after`.
 
 ## Measurement and limits
 
