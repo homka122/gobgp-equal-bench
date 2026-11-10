@@ -1,0 +1,39 @@
+# A big table with different community sets, loaded and then changed once:
+# what does sorting cost on the load, and what does the change gain?
+family      = "ipv4"
+routes      = 100000
+repetitions = 3
+
+[storm]
+rounds = 1
+resend = "changed"
+
+[[communities]]
+
+[[communities]]
+standard = 3
+extended = 3
+large    = 3
+order    = "random"
+
+[[communities]]
+standard = 10
+extended = 10
+large    = 10
+order    = "sorted"
+
+[[communities]]
+standard = 10
+extended = 10
+large    = 10
+order    = "random"
+
+[[communities]]
+standard = 10
+extended = 10
+large    = 10
+order    = "reversed"
+
+[[communities]]
+extended = 50
+order    = "random"

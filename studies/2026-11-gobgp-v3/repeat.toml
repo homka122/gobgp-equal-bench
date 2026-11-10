@@ -11,4 +11,4 @@ large    = 3
 
 [storm]
 rounds = 10
-resend = ["same", "changed", "standard-reversed", "extended-reversed", "large-reversed", "attributes-reordered"]
+resend = ["same", "changed", "standard-reversed", "extended-reversed", "large-reversed", "attributes-reordered", "changed-reordered"]

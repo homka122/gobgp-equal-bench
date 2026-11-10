@@ -10,4 +10,4 @@ there for a new measurement of `Path.Equal`.
 | Study | Question | Answer |
 |---|---|---|
 | [2026-10-upstream-pr](2026-10-upstream-pr) | What do the `Path.Equal` fixes give on upstream master? | Reordered re-announcements sent on: 100 000 → 0; CPU of such a storm −42…44%; `Path.Equal` 181 → 9 ns, 10 → 0 allocations |
-| [2026-11-gobgp-v3](2026-11-gobgp-v3) | The same fix ported to gobgp v3: are re-announcements of the same route sent on, and what do they cost? | Re-encoded re-announcements sent on: 100 000 → 0; CPU of such a storm −58…64%, allocated memory −61…67%; the first load does not change |
+| [2026-11-gobgp-v3](2026-11-gobgp-v3) | The same fix ported to gobgp v3: are re-announcements of the same route sent on, and what does sorting cost on the load? | Re-encoded re-announcements sent on: 100 000 → 0; CPU of such a storm −61…67%; a real change is still sent on and costs −17…23% CPU; the load of 100 000 routes: no change up to 9 community values per route, +7% CPU with 50 |
