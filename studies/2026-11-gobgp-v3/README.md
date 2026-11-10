@@ -95,7 +95,7 @@ then nothing happens for 10 seconds. IPv4 unicast and VPNv4, 3 repetitions of ea
 Nothing changes: the live heap, which is what the table itself takes after a forced GC, is within
 1% for both families, and so are the CPU and the allocated memory of the load. The peak RSS
 differences are inside the min–max ranges. The RSS after the idle time is in the report too, but
-it varies by 80–140 MiB between repetitions of one binary, depending on when the Go runtime
+it varies by 40–140 MiB between repetitions of one binary, depending on when the Go runtime
 returns memory to the system, so it shows nothing here.
 
 ## Code under test
