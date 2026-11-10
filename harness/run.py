@@ -51,7 +51,7 @@ SETTLE_STATS = {"HeapAlloc": "heap_alloc", "HeapInuse": "heap_inuse", "HeapIdle"
                 "HeapReleased": "heap_released", "HeapSys": "heap_sys", "Sys": "sys", "NumGC": "num_gc"}
 RESENDS = {  # resend -> (community kind it needs, how many values of it)
     "same": None, "changed": None, "standard-reversed": ("standard", 2), "extended-reversed": ("extended", 2),
-    "large-reversed": ("large", 2), "attributes-reordered": ("standard", 1),
+    "large-reversed": ("large", 2), "attributes-reordered": ("standard", 1), "changed-reordered": ("standard", 2),
 }
 ORDERS = ("sorted", "random", "reversed")
 DEFAULTS = {
@@ -365,7 +365,8 @@ def run_one(sc, rt, args, profile=None):
 
 def check(load, storm, sc):
     """Fails the run if the traffic was not what the scenario says. A gobgpd
-    either sends every reordered re-announcement on or none of them."""
+    either sends every reordered re-announcement on or none of them; a changed
+    route must be sent on however it is encoded."""
     n = sc["routes"]
     per_round = -(-n // sc["routes_per_update"])
     assert load["sent_updates"] == per_round, load["sent_updates"]
@@ -378,7 +379,7 @@ def check(load, storm, sc):
         return
     assert storm["sent_updates"] == per_round * sc["rounds"], storm["sent_updates"]
     every = n * sc["rounds"]
-    want = {"same": (0,), "changed": (every,)}.get(sc["resend"], (0, every))
+    want = {"same": (0,), "changed": (every,), "changed-reordered": (every,)}.get(sc["resend"], (0, every))
     for got in storm["sink_nlri_each"]:
         assert got in want, f"a receiver got {got} routes in the storm, want {' or '.join(map(str, want))}"
 

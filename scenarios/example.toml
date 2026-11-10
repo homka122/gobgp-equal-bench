@@ -29,7 +29,8 @@ resend = "same"              # what a round sends for every route:
                              #   extended-reversed     the same route, extended values in reverse order
                              #   large-reversed        the same route, large values in reverse order
                              #   attributes-reordered  the same route, COMMUNITIES before the other attributes
-                             # The last four alternate with the original form from round to round.
+                             #   changed-reordered     another MED and all four reorderings at once
+                             # The reorderings alternate with the original form from round to round.
 
 # How gobgpd and the test peers run.
 [runtime]

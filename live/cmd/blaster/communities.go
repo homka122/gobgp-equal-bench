@@ -17,11 +17,12 @@ import (
 //	extended-reversed     the extended community values in reverse order
 //	large-reversed        the large community values in reverse order
 //	attributes-reordered  the COMMUNITIES attribute before the other attributes
+//	changed-reordered     another MED every round and all of the reordering above
 //
-// The last four keep the route the same and change only its encoding. They
-// apply to every other round, the load included, so that each round differs
-// from the one before.
-var resends = []string{"same", "changed", "standard-reversed", "extended-reversed", "large-reversed", "attributes-reordered"}
+// The four reorderings keep the route the same and change only its encoding.
+// They apply to every other round, the load included, so that each round
+// differs from the one before.
+var resends = []string{"same", "changed", "standard-reversed", "extended-reversed", "large-reversed", "attributes-reordered", "changed-reordered"}
 
 // communitySet is the community values every route carries: distinct values
 // (COMMUNITIES 65000:x, route targets 65000:x, large 65000:1:x) in the order
@@ -84,6 +85,7 @@ func (c *communitySet) supports(resend string) error {
 	need := map[string]int{
 		"same": 0, "changed": 0, "attributes-reordered": 1 - len(c.standard),
 		"standard-reversed": 2 - len(c.standard), "extended-reversed": 2 - len(c.extended), "large-reversed": 2 - len(c.large),
+		"changed-reordered": 2 - len(c.standard),
 	}
 	missing, ok := need[resend]
 	if !ok {
@@ -106,7 +108,7 @@ func reversed[S ~[]E, E any](s S) S {
 func (c *communitySet) attrs(fam bgp.Family, resend string, round int) []bgp.PathAttributeInterface {
 	other := round%2 == 0
 	med := uint32(0)
-	if resend == "changed" {
+	if resend == "changed" || resend == "changed-reordered" {
 		med = uint32(round)
 	}
 	standard, extended, large := c.standard, c.extended, c.large
@@ -118,6 +120,8 @@ func (c *communitySet) attrs(fam bgp.Family, resend string, round int) []bgp.Pat
 			extended = reversed(extended)
 		case "large-reversed":
 			large = reversed(large)
+		case "changed-reordered":
+			standard, extended, large = reversed(standard), reversed(extended), reversed(large)
 		}
 	}
 	a := []bgp.PathAttributeInterface{
@@ -140,7 +144,7 @@ func (c *communitySet) attrs(fam bgp.Family, resend string, round int) []bgp.Pat
 	if len(large) > 0 {
 		a = append(a, bgp.NewPathAttributeLargeCommunities(large))
 	}
-	if resend == "attributes-reordered" && other {
+	if (resend == "attributes-reordered" || resend == "changed-reordered") && other {
 		i := slices.IndexFunc(a, func(x bgp.PathAttributeInterface) bool { return x.GetType() == bgp.BGP_ATTR_TYPE_COMMUNITIES })
 		a = append([]bgp.PathAttributeInterface{a[i]}, slices.Delete(slices.Clone(a), i, i+1)...)
 	}

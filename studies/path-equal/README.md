@@ -14,7 +14,7 @@ From the root of the repository:
 
 | Scenario | What happens | Question |
 |---|---|---|
-| [repeat.toml](repeat.toml) | 10 000 routes announced 10 more times: unchanged, changed, and the same route in four other encodings; IPv4 and VPNv4 | are repeats of the same route sent on, and what do they cost? |
+| [repeat.toml](repeat.toml) | 10 000 routes announced 10 more times: unchanged, changed, the same route in four other encodings, and changed and re-encoded at once; IPv4 and VPNv4 | are repeats of the same route sent on, and what do they cost? |
 | [sets.toml](sets.toml) | 100 000 routes with 0 to 50 community values per route: the load, then every route changes once | what does sorting cost on the load, and what does the change gain? |
 | [startup.toml](startup.toml) | 100 000 routes loaded once, then idle | does the memory of the table change? |
 
