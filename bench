@@ -7,10 +7,12 @@ IMAGE=gobgp-equal-bench
 usage() {
 	cat <<'EOF'
 usage:
-  ./bench run GOBGPD SCENARIO.toml... [--name NAME] [--local]
+  ./bench run GOBGPD SCENARIO.toml... [--name NAME] [--neighbor-config LINES] [--local]
       Measures the gobgpd binary in every scenario. The results go to
       results/NAME/<scenario file name>/; NAME defaults to the name of the
       binary. Runs in Docker; --local runs here (Linux, needs go and uv).
+      LINES go into the config of every neighbor of gobgpd, for a gobgpd
+      with options of its own.
 
   ./bench compare NAME NAME
       Compares two results: writes results/NAME..NAME.md.
@@ -23,10 +25,11 @@ EOF
 abs() { echo "$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"; }
 
 run() {
-	local gobgpd="" name="" where=docker scenarios=()
+	local gobgpd="" name="" nconf="" where=docker scenarios=()
 	while [ $# -gt 0 ]; do
 		case $1 in
 		--name) name=$2; shift ;;
+		--neighbor-config) nconf=$2; shift ;;
 		--local) where=local ;;
 		-*) usage 1 ;;
 		*) if [ -z "$gobgpd" ]; then gobgpd=$1; else scenarios+=("$1"); fi ;;
@@ -51,7 +54,7 @@ run() {
 				-v "$(abs "$s")":"/scenario/$(basename "$s")":ro \
 				-v "$ROOT/results":/bench/results \
 				-v "$IMAGE-cache":/cache \
-				"$IMAGE" run /gobgpd "/scenario/$(basename "$s")" --name "$name" --local
+				"$IMAGE" run /gobgpd "/scenario/$(basename "$s")" --name "$name" --neighbor-config "$nconf" --local
 		done
 		return
 	fi
@@ -59,7 +62,7 @@ run() {
 	for s in "${scenarios[@]}"; do
 		echo "== $(basename "$s" .toml)"
 		(cd "$ROOT/harness" && uv run -q python run.py --gobgpd "$gobgpd" --scenario "$(abs "$s")" \
-			--out "$ROOT/results/$name/$(basename "$s" .toml)")
+			--out "$ROOT/results/$name/$(basename "$s" .toml)" --neighbor-config "$nconf")
 	done
 }
 

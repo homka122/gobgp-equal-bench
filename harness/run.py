@@ -5,11 +5,15 @@
 scenarios/example.toml describes every field of a scenario. A field that
 holds a list runs every combination. One run of one combination: start gobgpd
 and the receivers (sink), let the sender (blaster) load the table, then let
-it announce the table again `storm.rounds` times. A phase ends when the
-marker route that blaster sends after it reaches every receiver: gobgpd
-handles the UPDATEs of a peer in order and sends to a peer through a FIFO
-queue, so by then it has handled the whole phase and sent everything the
-phase caused.
+it announce the table again `storm.rounds` times, and with [restart] let it
+drop the session and come back as a restarting speaker. A phase ends when two
+marker routes that blaster sends after it, one after the other, have reached
+every receiver: gobgpd handles the UPDATEs of a peer in order and sends to a
+peer through a FIFO queue, so by then it has handled the whole phase and sent
+everything the phase caused. With receiver_stall the receivers read nothing
+after the load, so the storm ends instead when gobgpd has used no CPU for a
+second: it has handled every UPDATE of the storm, and what it could not send
+waits in its queues.
 Nothing polls gobgpd while it works: a /metrics scrape allocates ~160 KiB
 inside gobgpd and would show up in the numbers. Go memory stats are read once
 before and once after a phase (building that page allocates a little in
@@ -50,18 +54,21 @@ MEMSTATS = {"TotalAlloc": "total_alloc", "Mallocs": "mallocs", "NumGC": "num_gc"
 SETTLE_STATS = {"HeapAlloc": "heap_alloc", "HeapInuse": "heap_inuse", "HeapIdle": "heap_idle",
                 "HeapReleased": "heap_released", "HeapSys": "heap_sys", "Sys": "sys", "NumGC": "num_gc"}
 RESENDS = {  # resend -> (community kind it needs, how many values of it)
-    "same": None, "changed": None, "standard-reversed": ("standard", 2), "extended-reversed": ("extended", 2),
+    "same": None, "changed": None, "changed-community": None,
+    "standard-reversed": ("standard", 2), "extended-reversed": ("extended", 2),
     "large-reversed": ("large", 2), "attributes-reordered": ("standard", 1), "changed-reordered": ("standard", 2),
 }
 ORDERS = ("sorted", "random", "reversed")
 DEFAULTS = {
-    "family": "ipv4", "routes": 10000, "routes_per_update": 1, "receivers": 1, "repetitions": 3,
-    "idle_after_load": 0,
-    "communities": {"standard": 0, "extended": 0, "large": 0, "order": "sorted", "seed": 1},
+    "family": "ipv4", "routes": 10000, "routes_per_update": 1, "receivers": 1, "receiver_rate": 0, "receiver_stall": False,
+    "repetitions": 3, "idle_after_load": 0,
+    "communities": {"standard": 0, "extended": 0, "large": 0, "order": "sorted", "seed": 1, "unique": False, "groups": 0},
     "storm": {"rounds": 0, "resend": "same"},
+    "restart": {"pause": 0, "restart_time": 15, "llgr_stale_time": 86400, "receiver_llgr": False},
     "runtime": {"gomaxprocs": 2, "gogc": "", "gomemlimit": "", "gobgpd_cpus": "0,1", "sender_cpus": "2,3", "receiver_cpus": "2,3",
-                "cpu_profile_seconds": 0},
+                "cpu_profile_seconds": 0, "log_level": "warn"},
 }
+GR_LOG = re.compile(r"raceful|LLGR|[Ss]tale|[Pp]eer [Dd]own|[Pp]eer [Uu]p|EOR|End-of-RIB")
 GCTRACE = re.compile(r"^gc (\d+) @([\d.]+)s .* (\d+)->(\d+)->(\d+) MB")
 
 
@@ -79,6 +86,26 @@ def memstats(fields=MEMSTATS, gc=False):
         if len(parts) == 4 and parts[0] == "#" and parts[1] in fields:
             m[fields[parts[1]]] = float(parts[3])
     return m
+
+
+def tcp_queues(port=10179):
+    """The established TCP connections to or from port, from /proc/net/tcp
+    and tcp6: bytes the kernel holds, sent but not acknowledged by the peer
+    (tx) and received but not read by the process (rx)."""
+    out = []
+    for f in ("/proc/net/tcp", "/proc/net/tcp6"):
+        try:
+            lines = Path(f).read_text().splitlines()[1:]
+        except OSError:
+            continue
+        for line in lines:
+            x = line.split()
+            local, remote, state = x[1], x[2], x[3]
+            if state == "01" and port in (int(local.rsplit(":", 1)[1], 16), int(remote.rsplit(":", 1)[1], 16)):
+                tx, rx = (int(v, 16) for v in x[4].split(":"))
+                out.append({"local_port": int(local.rsplit(":", 1)[1], 16),
+                            "remote_port": int(remote.rsplit(":", 1)[1], 16), "tx": tx, "rx": rx})
+    return out
 
 
 def sink(i=0):
@@ -119,33 +146,64 @@ def load_scenario(path):
         cfg = table(tomllib.load(f), DEFAULTS, "")
     cfg["storm"] = table(cfg["storm"], DEFAULTS["storm"], "storm.")
     cfg["runtime"] = table(cfg["runtime"], DEFAULTS["runtime"], "runtime.")
+    cfg["restart"] = table(cfg["restart"], DEFAULTS["restart"], "restart.")
+    rs = cfg["restart"]
+    pauses = rs["pause"] if isinstance(rs["pause"], list) else [rs["pause"]]
+    llgrs = rs["receiver_llgr"] if isinstance(rs["receiver_llgr"], list) else [rs["receiver_llgr"]]
+    if any(x > 0 for x in pauses) and not rs["restart_time"]:
+        fail("restart.pause needs restart.restart_time > 0")
     sets = cfg["communities"] if isinstance(cfg["communities"], list) else [cfg["communities"]]
     sets = [table(c, DEFAULTS["communities"], "communities.") for c in sets]
     for c in sets:
         choice(c["order"], ORDERS, "communities.order")
+        if c["groups"] and (c["unique"] or cfg["routes_per_update"] != 1):
+            fail("communities.groups needs routes_per_update = 1 and unique = false")
     rounds = cfg["storm"]["rounds"]
+    if cfg["receiver_stall"] and (not rounds or any(x > 0 for x in pauses)):
+        fail("receiver_stall needs storm.rounds > 0 and no [restart]")
     resends = choice(cfg["storm"]["resend"], list(RESENDS), "storm.resend") if rounds else ["same"]
     receivers = cfg["receivers"] if isinstance(cfg["receivers"], list) else [cfg["receivers"]]
     combos = []
-    for family, comm, k, resend in itertools.product(choice(cfg["family"], list(AFI_SAFI), "family"), sets, receivers, resends):
+    for family, comm, k, resend, pause, llgr in itertools.product(
+            choice(cfg["family"], list(AFI_SAFI), "family"), sets, receivers, resends, pauses, llgrs):
         if need := RESENDS[resend]:
             if comm[need[0]] < need[1]:
                 fail(f"storm.resend = {resend!r} needs communities.{need[0]} >= {need[1]}")
         combos.append({"family": family, "routes": cfg["routes"], "routes_per_update": cfg["routes_per_update"],
-                       "receivers": k, "communities": comm, "rounds": rounds, "resend": resend,
-                       "idle_after_load": cfg["idle_after_load"]})
+                       "receivers": k, "receiver_rate": cfg["receiver_rate"], "receiver_stall": cfg["receiver_stall"],
+                       "communities": comm,
+                       "rounds": rounds, "resend": resend, "idle_after_load": cfg["idle_after_load"],
+                       "restart": {**rs, "pause": pause, "receiver_llgr": llgr} if pause > 0 else None})
     return cfg, combos
 
 
 def label(sc):
     c = sc["communities"]
     return (f"{sc['family']}_{sc['resend'] if sc['rounds'] else 'load'}_"
-            f"{c['standard']}-{c['extended']}-{c['large']}-{c['order']}_{sc['receivers']}rx")
+            f"{c['standard']}-{c['extended']}-{c['large']}-{c['order']}{'-unique' if c['unique'] else ''}"
+            f"{f'-groups{g}' if (g := c['groups']) else ''}_{sc['receivers']}rx{'-stall' if sc['receiver_stall'] else ''}"
+            + (f"_restart{r['pause']:g}s{'-llgr' if r['receiver_llgr'] else ''}" if (r := sc["restart"]) else ""))
 
 
-def dut_config(family, sinks):
-    """The config from live/dut.toml.tmpl with a neighbor per receiver."""
+def dut_config(family, sinks, neighbor_config="", restart=None):
+    """The config from live/dut.toml.tmpl with a neighbor per receiver;
+    neighbor_config is more lines for the config of every neighbor. With
+    restart (scenario [restart]) every neighbor has graceful restart with
+    notification and long-lived graceful restart, as gobgpd advertises them
+    itself and as it helps a peer that restarts."""
     tmpl = (ROOT / "live" / "dut.toml.tmpl").read_text().replace("{family}", AFI_SAFI[family])
+    tmpl = tmpl.replace("{neighbor_config}", neighbor_config.strip().replace("\n", "\n    "))
+    gr = afi_gr = ""
+    if restart:
+        llgr = restart["llgr_stale_time"] > 0
+        gr = ("[neighbors.graceful-restart.config]\n"
+              "    enabled = true\n    notification-enabled = true\n"
+              f"    long-lived-enabled = {str(llgr).lower()}\n    restart-time = {restart['restart_time']}")
+        afi_gr = "[neighbors.afi-safis.mp-graceful-restart.config]\n      enabled = true"
+        if llgr:
+            afi_gr += ("\n    [neighbors.afi-safis.long-lived-graceful-restart.config]\n"
+                       f"      enabled = true\n      restart-time = {restart['llgr_stale_time']}")
+    tmpl = tmpl.replace("{graceful_restart}", gr).replace("{afi_safi_graceful_restart}", afi_gr)
     i = tmpl.index("[[neighbors]]", tmpl.index("[[neighbors]]") + 1)
     head, sink_block = tmpl[:i], tmpl[i:]
     head = head.replace('"{sink_addr}"', ", ".join(f'"{a}"' for a in sinks))
@@ -170,9 +228,11 @@ class Run:
         family = sc["family"]
         conf = workdir / "dut.toml"
         addrs = sink_addrs(args.sink_addr, sc["receivers"])
-        conf.write_text(dut_config(family, addrs))
+        restart = sc["restart"]
+        conf.write_text(dut_config(family, addrs, args.neighbor_config, restart))
+        self.workdir = workdir
         cmd = [str(args.gobgpd), "-f", str(conf), "--api-hosts", "127.0.0.1:10150",
-               "--pprof-host", "127.0.0.1:10160", "--metrics-path", "", "--log-level", "warn"]
+               "--pprof-host", "127.0.0.1:10160", "--metrics-path", "", "--log-level", rt["log_level"]]
         if rt["gobgpd_cpus"] and sys.platform == "linux":
             cmd = ["taskset", "-c", rt["gobgpd_cpus"]] + cmd
         env = dict(os.environ, GOMAXPROCS=str(rt["gomaxprocs"]), GODEBUG="gctrace=1")
@@ -192,14 +252,20 @@ class Run:
             host = f"[{a}]" if ":" in a else a
             self.sinks.append(subprocess.Popen(
                 receivers + [str(BIN / "sink"), "-family", family, "-local", a, "-remote", f"{host}:10179",
-                         "-http", f"127.0.0.1:{SINK_HTTP_PORT + i}", "-id", f"3.3.{i // 256}.{i % 256 + 3}"],
+                         "-http", f"127.0.0.1:{SINK_HTTP_PORT + i}", "-id", f"3.3.{i // 256}.{i % 256 + 3}",
+                         "-rate", str(sc["receiver_rate"])]
+                # the load ends with markers 1 and 2: a stalled receiver reads up to there
+                + (["-stall-at", "2"] if sc["receiver_stall"] else [])
+                + (["-table"] if restart else []) + (["-llgr"] if restart and restart["receiver_llgr"] else []),
                 stderr=self.log))
         c = sc["communities"]
         self.blaster = subprocess.Popen(
             sender + [str(BIN / "blaster"), "-family", family, "-routes", str(sc["routes"]),
                      "-per-update", str(sc["routes_per_update"]), "-resend", sc["resend"],
                      "-standard", str(c["standard"]), "-extended", str(c["extended"]), "-large", str(c["large"]),
-                     "-order", c["order"], "-seed", str(c["seed"])],
+                     "-order", c["order"], "-seed", str(c["seed"])] + (["-unique"] if c["unique"] else []) + ["-groups", str(c["groups"])]
+            + (["-gr-restart-time", str(restart["restart_time"]), "-llgr-stale-time", str(restart["llgr_stale_time"])]
+               if restart else []),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.log, text=True)
         assert self.reply()["ready"]
         for i in range(len(addrs)):
@@ -249,14 +315,18 @@ class Run:
         return self.reply()
 
     def wait_marker(self, timeout=600):
-        """Sends the next marker and waits until the sink has it."""
-        self.marker += 1
-        self.send(f"mark {self.marker}")
-        deadline = time.time() + timeout
-        while min(x["marker"] for x in self.sink_stats()) < self.marker:
-            if time.time() > deadline:
-                raise TimeoutError(f"marker {self.marker} did not reach the sink in {timeout}s")
-            time.sleep(0.02)
+        """Sends a marker, waits until the sinks have it, and does so once
+        more. gobgpd sends the UPDATEs it packs in one pass in any order, so
+        routes of the phase can follow the first marker. They are sent in
+        that pass, and the second marker in a later one."""
+        for _ in range(2):
+            self.marker += 1
+            self.send(f"mark {self.marker}")
+            deadline = time.time() + timeout
+            while min(x["marker"] for x in self.sink_stats()) < self.marker:
+                if time.time() > deadline:
+                    raise TimeoutError(f"marker {self.marker} did not reach the sink in {timeout}s")
+                time.sleep(0.02)
         return time.time()
 
     def read_stderr(self):
@@ -273,9 +343,22 @@ class Run:
                 out.append([round(t - start, 3), int(m.group(3)), int(m.group(5))])
         return out
 
-    def phase(self, command, profile=None):
+    def wait_idle(self, timeout=600):
+        """Waits until gobgpd has used under 0.02 s of CPU in a second and
+        returns when that second began."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            t, c = time.time(), self.cpu()
+            time.sleep(1)
+            if self.cpu() - c < 0.02:
+                return t
+        raise TimeoutError(f"gobgpd did not go idle in {timeout}s")
+
+    def phase(self, command, profile=None, then=(), idle=False):
         """With profile=(path, seconds) a CPU profile of gobgpd covers the
-        phase and is written to path."""
+        phase and is written to path. The commands in then follow command
+        before the markers. With idle the phase ends when gobgpd goes idle
+        instead of with the markers."""
         samples, stop = [], threading.Event()
 
         def sample():
@@ -297,7 +380,9 @@ class Run:
         th.start()
         try:
             sent = self.send(command)
-            end = self.wait_marker()
+            for c in then:
+                self.send(c)
+            end = self.wait_idle() if idle else self.wait_marker()
             after = self.snapshot()
         finally:
             stop.set()  # a failed phase must not leave the sampler running
@@ -315,6 +400,8 @@ class Run:
         delta["sent_seconds"] = sent["seconds"]
         delta["rss_series"] = [s for s in samples if s[0] <= delta["seconds"]]
         delta["gc_series"] = self.gc_cycles(start, before["num_gc"] + 1, after["num_gc"])
+        if idle:
+            delta["tcp_queues"] = tcp_queues()
         return delta
 
     def profile(self, path, seconds):
@@ -337,6 +424,97 @@ class Run:
         settled["rss"] = self.proc.memory_info().rss
         return {"seconds": seconds, "after_gc": after_gc, "settled": settled, "rss_series": series}
 
+    def restart(self, r):
+        """The sender drops the session without a NOTIFICATION, waits
+        r["pause"] seconds, connects again as a restarting speaker, announces
+        the table of the load and sends End-of-RIB; then the markers. The
+        windows split the time from the drop: down until the Restart Time
+        runs out or the sender is back, llgr from then until the sender is
+        back, up while it announces the table, eor from End-of-RIB to the
+        markers. Each window has what the receivers got in it and the peak
+        RSS; the times are seconds from the drop. The sinks are sampled every
+        0.1 s with the RSS; they keep the table, so the run can tell whether
+        it is the table of the load again."""
+        samples, stop = [], threading.Event()
+        keys = ("nlri", "withdrawn", "llgr_stale", "updates")
+        lasts = ("last_announce_unix_nano", "last_withdraw_unix_nano", "last_llgr_stale_unix_nano")
+
+        def counters():
+            st = self.sink_stats()
+            c = {k: sum(x.get(k, 0) for x in st) for k in keys}
+            c["last"] = max(x.get(k, 0) for x in st for k in lasts)
+            return c
+
+        def sample():
+            while not stop.is_set():
+                try:
+                    c = counters()
+                    samples.append([round(time.time() - start, 3), self.proc.memory_info().rss] + [c[k] for k in keys + ("last",)])
+                except (psutil.Error, OSError):
+                    pass
+                stop.wait(0.1)
+
+        before = self.snapshot()
+        table_before = [{k: x.get(k) for k in ("table", "table_llgr_stale", "table_digest")} for x in before["sinks"]]
+        at = {}
+        start = time.time()
+        th = threading.Thread(target=sample, daemon=True)
+        th.start()
+        try:
+            self.send("down")
+            at["down"] = (time.time() - start, counters())
+            time.sleep(max(0, start + r["pause"] - time.time()))
+            at["up"] = (time.time() - start, counters())
+            up = self.send("up")
+            at["eor"] = (time.time() - start, counters())
+            self.send("eor")
+            end = self.wait_marker()
+            at["end"] = (end - start, counters())
+            after = self.snapshot()
+        finally:
+            stop.set()
+            th.join()
+        bounds = [("down", at["down"]), ("up", at["up"]), ("eor", at["eor"]), ("end", at["end"])]
+        if r["restart_time"] < at["up"][0]:
+            t = r["restart_time"]
+            before_t = [x for x in samples if x[0] <= t]
+            c = dict(zip(keys + ("last",), before_t[-1][2:])) if before_t else at["down"][1]
+            bounds.insert(1, ("llgr", (t, c)))
+        windows = {}
+        for (name, (t0, c0)), (_, (t1, c1)) in zip(bounds, bounds[1:]):
+            inside = [x for x in samples if t0 <= x[0] < t1] or [[t0, after["rss"]]]
+            w = {"start": round(t0, 3), "end": round(t1, 3), "rss_peak": max(x[1] for x in inside)}
+            w.update({k: c1[k] - c0[k] for k in keys})
+            # when the last route of the window came, from the drop
+            last = c1["last"] / 1e9 - start
+            w["last_route"] = round(last, 3) if c1["last"] and last >= t0 and w["nlri"] + w["withdrawn"] else None
+            windows[name] = w
+
+        def since(ns):
+            return round(ns / 1e9 - start, 3) if ns and ns / 1e9 >= start else None
+
+        sinks = []
+        for x, b in zip(after["sinks"], table_before):
+            sinks.append({"table": x.get("table", 0), "table_llgr_stale": x.get("table_llgr_stale", 0),
+                          "table_digest": x.get("table_digest"), "table_after_load": b,
+                          "same_table": x.get("table") == b["table"] and x.get("table_digest") == b["table_digest"]
+                          and not x.get("table_llgr_stale"),
+                          "last_announce": since(x.get("last_announce_unix_nano")),
+                          "last_withdraw": since(x.get("last_withdraw_unix_nano")),
+                          "last_llgr_stale": since(x.get("last_llgr_stale_unix_nano"))})
+        return {"pause": r["pause"], "seconds": end - start, "windows": windows, "sinks": sinks,
+                "rss_peak": max([x[1] for x in samples] + [after["rss"]]), "rss_end": after["rss"],
+                "cpu": after["cpu"] - before["cpu"], "up_connect_seconds": up.get("connect_seconds"),
+                "up_sent_seconds": up["seconds"], "up_sent_updates": up["updates"],
+                "series": [x for x in samples if x[0] <= end - start], "series_fields": ["t", "rss"] + list(keys) + ["last_unix_nano"],
+                "log": self.gr_log()}
+
+    def gr_log(self):
+        """The lines of the gobgpd log about the sessions and graceful
+        restart."""
+        lines = (self.workdir / "dut.log").read_text().splitlines() + [line for _, line in self.stderr]
+        return [line[:400] for line in lines if GR_LOG.search(line) and not line.startswith("gc ")][:200]
+
     def close(self):
         for p in [self.blaster] + self.sinks + [self.dut]:
             p.kill()
@@ -349,9 +527,11 @@ def run_one(sc, rt, args, profile=None):
     with tempfile.TemporaryDirectory() as d:
         r = Run(sc, rt, args, Path(d))
         try:
-            load = r.phase("load", (profile, rt["cpu_profile_seconds"]) if profile else None)
+            load = r.phase("load", (profile, rt["cpu_profile_seconds"]) if profile else None,
+                           then=("eor",) if sc["restart"] else ())
             idle = r.settle(sc["idle_after_load"]) if sc["idle_after_load"] else None
-            storm = r.phase(f"storm {sc['rounds']}") if sc["rounds"] else None
+            storm = r.phase(f"storm {sc['rounds']}", idle=sc["receiver_stall"]) if sc["rounds"] else None
+            restart = r.restart(sc["restart"]) if sc["restart"] else None
         except Exception:
             logs = (Path(d) / "dut.log").read_text().splitlines() + [line for _, line in r.stderr]
             print("\n".join(line for line in logs if not line.startswith("gc "))[-2000:], file=sys.stderr)
@@ -360,13 +540,15 @@ def run_one(sc, rt, args, profile=None):
             r.close()
     check(load, storm, sc)
     return {"scenario": sc, "probe_alloc": r.probe_alloc, "load": load, "idle": idle, "storm": storm,
-            "started": started, "ended": time.time()}
+            "restart": restart, "started": started, "ended": time.time()}
 
 
 def check(load, storm, sc):
     """Fails the run if the traffic was not what the scenario says. A gobgpd
     either sends every reordered re-announcement on or none of them; a changed
-    route must be sent on however it is encoded."""
+    route must be sent on however it is encoded. A gobgpd may merge the
+    changes of a route that wait in its queues, so of the changes of a route
+    it sends on at least one and at most all."""
     n = sc["routes"]
     per_round = -(-n // sc["routes_per_update"])
     assert load["sent_updates"] == per_round, load["sent_updates"]
@@ -379,7 +561,15 @@ def check(load, storm, sc):
         return
     assert storm["sent_updates"] == per_round * sc["rounds"], storm["sent_updates"]
     every = n * sc["rounds"]
-    want = {"same": (0,), "changed": (every,), "changed-reordered": (every,)}.get(sc["resend"], (0, every))
+    if sc["receiver_stall"]:
+        for got in storm["sink_nlri_each"]:
+            assert got == 0, f"a stalled receiver got {got} routes in the storm"
+        return
+    if sc["resend"] in ("changed", "changed-community", "changed-reordered"):
+        for got in storm["sink_nlri_each"]:
+            assert n <= got <= every, f"a receiver got {got} routes in the storm, want {n} to {every}"
+        return
+    want = (0,) if sc["resend"] == "same" else (0, every)
     for got in storm["sink_nlri_each"]:
         assert got in want, f"a receiver got {got} routes in the storm, want {' or '.join(map(str, want))}"
 
@@ -427,6 +617,7 @@ def write_env(args, cfg, info):
         "memory_bytes": psutil.virtual_memory().total,
         "go": out("go", "version"),
         "gobgpd": info,
+        "neighbor_config": args.neighbor_config,
         "scenario_file": args.scenario.name,
         "scenario": cfg,
     }
@@ -440,6 +631,8 @@ def main():
     p.add_argument("--out", type=Path, required=True, help="directory for the results")
     p.add_argument("--sink-addr", default="127.0.0.2" if sys.platform == "linux" else "::1",
                    help="address of the first receiver; several receivers need Linux")
+    p.add_argument("--neighbor-config", default="",
+                   help="lines to add to the config of every neighbor, for options of this gobgpd")
     args = p.parse_args()
     cfg, combos = load_scenario(args.scenario)
     rt = cfg["runtime"]
@@ -464,10 +657,20 @@ def main():
             res["rep"] = rep
             (raw / f"{name}.json").write_text(json.dumps(res))
             done += 1
+            if rs := res["restart"]:
+                w = rs["windows"]
+                print(f"[{done}/{total}] {name}: load peak rss {res['load']['rss_peak'] / 2**20:.0f} MiB; restart peak rss "
+                      f"{rs['rss_peak'] / 2**20:.0f} MiB, " + ", ".join(
+                          f"{k} +{v['nlri']}/-{v['withdrawn']}/llgr {v['llgr_stale']}" for k, v in w.items())
+                      + f", done {rs['seconds']:.1f}s, same table {all(x['same_table'] for x in rs['sinks'])}", flush=True)
+                continue
             st = res["storm"] or res["load"]
             print(f"[{done}/{total}] {name}: {'storm' if res['storm'] else 'load'} cpu {st['cpu']:.2f}s, "
                   f"allocated {st['total_alloc'] / 2**20:.0f} MiB, peak rss {st['rss_peak'] / 2**20:.0f} MiB, "
-                  f"sent on {st['sink_nlri']:.0f}", flush=True)
+                  f"sent on {st['sink_nlri']:.0f}"
+                  + (f", in the kernel: sent unacknowledged {sum(q['tx'] for q in qs) / 2**20:.1f} MiB, "
+                     f"received unread {sum(q['rx'] for q in qs) / 2**20:.1f} MiB"
+                     if (qs := st.get("tcp_queues")) is not None else ""), flush=True)
 
 
 if __name__ == "__main__":

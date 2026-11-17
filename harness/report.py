@@ -34,6 +34,8 @@ def scenario_key(sc):
     c = sc["communities"]
     total = c["standard"] + c["extended"] + c["large"]
     communities = f"{c['standard']} + {c['extended']} + {c['large']}, {c['order']}" if total else "none"
+    if c.get("unique"):
+        communities += ", one of its own"
     return sc["family"], communities, sc["receivers"], sc["resend"] if sc["rounds"] else "–"
 
 

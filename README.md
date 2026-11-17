@@ -33,6 +33,8 @@ Notes:
 - With Docker on macOS the binary has to be under a path the Docker VM shares, such as your home.
 - `--local` runs without Docker; that needs Linux, Go and [uv](https://docs.astral.sh/uv/).
 - One `run` takes several scenario files; each gets its own directory in the results.
+- `--neighbor-config 'LINES'` adds lines to the config of every neighbor, for a gobgpd with
+  options of its own.
 
 ## A scenario
 
@@ -64,16 +66,18 @@ Every run starts a fresh gobgpd (AS 200) with its peers on the same machine:
 
 - the **sender** (`blaster`, AS 100) builds every UPDATE itself, so it controls what a repeated
   announcement looks like byte by byte;
-- a **receiver** (`sink`, AS 300) counts the routes gobgpd sends it and drops them.
+- a **receiver** (`sink`, AS 300) counts the routes gobgpd sends it and drops them; with
+  `receiver_rate` it takes only so many routes per second, as a slow peer does.
 
 A run has two phases:
 
 1. **load**: the sender announces the table for the first time;
 2. **storm**: it announces the same routes again, `storm.rounds` times, as `storm.resend` says.
 
-A phase ends when a marker route sent after it reaches every receiver: gobgpd handles the UPDATEs
-of a peer in order, so by then it has done all the work of the phase. The run fails unless the
-receivers got exactly what the scenario says.
+A phase ends when a marker route sent after it reaches every receiver, and then one more: gobgpd
+handles the UPDATEs of a peer in order, so by then it has done all the work of the phase. The run
+fails unless the receivers got what the scenario says; when a route changes several times while
+it waits in gobgpd, gobgpd may send on only the last change.
 
 ## What is measured
 

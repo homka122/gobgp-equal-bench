@@ -7,9 +7,18 @@
 //	load        announce all routes once
 //	storm R     announce all routes R more times, as -resend says
 //	mark K      announce the marker route 198.18.K.0/24
+//	eor         send the End-of-RIB marker
+//	down        close the TCP connection without a NOTIFICATION
+//	up          connect again as a restarting speaker and announce all
+//	            routes as the load did
 //	quit
 //
 // and prints one JSON line on stdout when a command has been sent.
+//
+// With -gr-restart-time the OPEN carries the Graceful Restart Capability,
+// with -llgr-stale-time also the Long-Lived Graceful Restart Capability, both
+// with the N bit and for the family of the routes. After up the R bit and the
+// F bits are set: the speaker has restarted and kept its forwarding state.
 package main
 
 import (
@@ -18,6 +27,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math/rand/v2"
 	"net/netip"
 	"os"
 	"slices"
@@ -45,7 +55,13 @@ var (
 	large     = flag.Int("large", 0, "large communities per route")
 	order     = flag.String("order", "sorted", "order of the community values: sorted, random or reversed")
 	seed      = flag.Uint64("seed", 1, "seed of the random order")
-	resend    = flag.String("resend", "same", "what a storm round sends: "+strings.Join(resends, ", "))
+	unique    = flag.Bool("unique", false, "give every UPDATE a large community of its own")
+	groups    = flag.Int("groups", 0, "put every route into one of that many groups at random, once for the run: "+
+		"the routes of a group share a large community of their own, and each time the routes are announced it is one "+
+		"by one in a new random order; 0: no groups")
+	resend   = flag.String("resend", "same", "what a storm round sends: "+strings.Join(resends, ", "))
+	grTime   = flag.Int("gr-restart-time", 0, "Restart Time of the Graceful Restart Capability, s; 0: no capability")
+	llgrTime = flag.Int("llgr-stale-time", 0, "Long-Lived Stale Time, s; 0: no Long-Lived Graceful Restart Capability")
 )
 
 func main() {
@@ -61,21 +77,21 @@ func main() {
 	if *family == "vpnv4" {
 		fam = bgp.RF_IPv4_VPN
 	}
-	s, err := speaker.Dial(*local, *remote, localAS, netip.MustParseAddr("1.1.1.1"), []bgp.Family{fam})
-	if err != nil {
-		log.Fatal(err)
-	}
-	go func() { // drain whatever gobgpd sends us
-		for {
-			if _, err := s.ReadRaw(); err != nil {
-				log.Fatalf("session closed: %v", err)
-			}
-		}
-	}()
+	s := dial(fam, false)
 	nlris := make([]bgp.PathNLRI, *routes)
 	for i := range *routes {
 		// 10.x.y.0/24, then 11.x.y.0/24 after 65536 routes
 		nlris[i] = nlri(fam, netip.PrefixFrom(netip.AddrFrom4([4]byte{byte(10 + i>>16), byte(i >> 8), byte(i), 0}), 24))
+	}
+	if *groups > 0 {
+		if *unique || *perUpdate != 1 {
+			log.Fatal("-groups needs -per-update 1 and no -unique")
+		}
+		rnd = rand.New(rand.NewPCG(*seed, *seed^0x5bd1e995))
+		group = make([]int, *routes)
+		for i := range group {
+			group[i] = rnd.IntN(*groups)
+		}
 	}
 
 	out := json.NewEncoder(os.Stdout)
@@ -88,10 +104,25 @@ func main() {
 		fmt.Sscan(in.Text(), &cmd, &arg)
 		start := time.Now()
 		updates := 0
+		reply := map[string]any{}
 		switch cmd {
 		case "load":
 			updates = announce(s, fam, nlris, set.attrs(fam, *resend, round))
 			round++
+		case "eor":
+			if err := s.Send(bgp.NewEndOfRib(fam)); err != nil {
+				log.Fatal(err)
+			}
+			if err := s.Flush(); err != nil {
+				log.Fatal(err)
+			}
+			updates = 1
+		case "down":
+			s.Close()
+		case "up":
+			s = dial(fam, true)
+			reply["connect_seconds"] = time.Since(start).Seconds()
+			updates = announce(s, fam, nlris, set.attrs(fam, *resend, 0))
 		case "storm":
 			for range arg {
 				updates += announce(s, fam, nlris, set.attrs(fam, *resend, round))
@@ -100,18 +131,56 @@ func main() {
 		case "mark":
 			// gobgpd handles the UPDATEs of a peer in the order they come
 			// and sends to each peer through a FIFO queue: when a receiver
-			// has the marker, gobgpd has handled every UPDATE before it and
-			// sent whatever they caused.
+			// has the marker, gobgpd has handled every UPDATE before it. What
+			// they caused it sends in one pass with the marker at the latest,
+			// so everything is sent when the next marker arrives.
 			p := netip.PrefixFrom(netip.AddrFrom4([4]byte{198, 18, byte(arg), 0}), 24)
-			updates = announce(s, fam, []bgp.PathNLRI{nlri(fam, p)}, set.attrs(fam, "same", 0))
+			updates = announceMarker(s, fam, nlri(fam, p), set.attrs(fam, "same", 0))
 		case "quit":
 			s.Close()
 			return
 		default:
 			log.Fatalf("unknown command %q", strings.TrimSpace(in.Text()))
 		}
-		out.Encode(map[string]any{"cmd": cmd, "updates": updates, "seconds": time.Since(start).Seconds()})
+		reply["cmd"], reply["updates"], reply["seconds"] = cmd, updates, time.Since(start).Seconds()
+		out.Encode(reply)
 	}
+}
+
+// dial connects to gobgpd and drains whatever it sends.
+func dial(fam bgp.Family, restarted bool) *speaker.Session {
+	var caps []bgp.ParameterCapabilityInterface
+	if *grTime > 0 {
+		caps = append(caps, bgp.NewCapGracefulRestart(restarted, true, uint16(*grTime),
+			[]*bgp.CapGracefulRestartTuple{bgp.NewCapGracefulRestartTuple(fam, restarted)}))
+	}
+	if *grTime > 0 && *llgrTime > 0 {
+		caps = append(caps, bgp.NewCapLongLivedGracefulRestart(
+			[]*bgp.CapLongLivedGracefulRestartTuple{bgp.NewCapLongLivedGracefulRestartTuple(fam, restarted, uint32(*llgrTime))}))
+	}
+	// gobgpd closes a connection that comes while the peer is Idle, for a
+	// few seconds after a session ends: try again, as a BGP speaker does.
+	var s *speaker.Session
+	var err error
+	for deadline := time.Now().Add(time.Minute); ; time.Sleep(100 * time.Millisecond) {
+		if s, err = speaker.Dial(*local, *remote, localAS, netip.MustParseAddr("1.1.1.1"), []bgp.Family{fam}, caps...); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			log.Fatal(err)
+		}
+	}
+	go func() {
+		for {
+			if _, err := s.ReadRaw(); err != nil {
+				if !s.Closed() {
+					log.Fatalf("session closed: %v", err)
+				}
+				return
+			}
+		}
+	}()
+	return s
 }
 
 func nlri(fam bgp.Family, p netip.Prefix) bgp.PathNLRI {
@@ -138,27 +207,62 @@ func withByType(a []bgp.PathAttributeInterface, x bgp.PathAttributeInterface) []
 	return slices.Insert(slices.Clone(a), i, x)
 }
 
+// With -groups: the group of every route, and the random source of the
+// groups and of the order the routes are announced in.
+var (
+	group []int
+	rnd   *rand.Rand
+)
+
+// announce sends all routes with the attributes a, *perUpdate to an UPDATE.
 func announce(s *speaker.Session, fam bgp.Family, nlris []bgp.PathNLRI, a []bgp.PathAttributeInterface) int {
 	updates := 0
-	for i := 0; i < len(nlris); i += *perUpdate {
-		batch := nlris[i:min(i+*perUpdate, len(nlris))]
-		var m *bgp.BGPMessage
-		if fam == bgp.RF_IPv4_UC {
-			m = bgp.NewBGPUpdateMessage(nil, a, batch)
-		} else {
-			mp, err := bgp.NewPathAttributeMpReachNLRI(fam, batch, netip.MustParseAddr("127.0.0.1"))
-			if err != nil {
-				log.Fatal(err)
+	if group != nil {
+		for _, i := range rnd.Perm(len(nlris)) {
+			send(s, fam, nlris[i:i+1], withOwn(a, group[i]))
+			updates++
+		}
+	} else {
+		for i := 0; i < len(nlris); i += *perUpdate {
+			a := a
+			if *unique {
+				a = withOwn(a, i)
 			}
-			m = bgp.NewBGPUpdateMessage(nil, withByType(a, mp), nil)
+			send(s, fam, nlris[i:min(i+*perUpdate, len(nlris))], a)
+			updates++
 		}
-		if err := s.Send(m); err != nil {
-			log.Fatal(err)
-		}
-		updates++
 	}
 	if err := s.Flush(); err != nil {
 		log.Fatal(err)
 	}
 	return updates
+}
+
+// announceMarker sends the marker route n; with -unique it carries the
+// community of the first route, with -groups none of a group.
+func announceMarker(s *speaker.Session, fam bgp.Family, n bgp.PathNLRI, a []bgp.PathAttributeInterface) int {
+	if *unique {
+		a = withOwn(a, 0)
+	}
+	send(s, fam, []bgp.PathNLRI{n}, a)
+	if err := s.Flush(); err != nil {
+		log.Fatal(err)
+	}
+	return 1
+}
+
+func send(s *speaker.Session, fam bgp.Family, batch []bgp.PathNLRI, a []bgp.PathAttributeInterface) {
+	var m *bgp.BGPMessage
+	if fam == bgp.RF_IPv4_UC {
+		m = bgp.NewBGPUpdateMessage(nil, a, batch)
+	} else {
+		mp, err := bgp.NewPathAttributeMpReachNLRI(fam, batch, netip.MustParseAddr("127.0.0.1"))
+		if err != nil {
+			log.Fatal(err)
+		}
+		m = bgp.NewBGPUpdateMessage(nil, withByType(a, mp), nil)
+	}
+	if err := s.Send(m); err != nil {
+		log.Fatal(err)
+	}
 }

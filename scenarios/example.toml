@@ -8,6 +8,11 @@ family            = "ipv4"   # ipv4 | vpnv4
 routes            = 10000    # routes in the table
 routes_per_update = 1        # routes packed into one UPDATE message
 receivers         = 1        # peers gobgpd sends the routes on to
+receiver_rate     = 0        # routes a receiver takes per second, the rest waits in gobgpd;
+                             # 0: as fast as they come
+receiver_stall    = false    # true: the receivers read nothing after the load, but keep the
+                             # session up, so all the storm waits in gobgpd; the storm ends
+                             # when gobgpd stops using CPU
 repetitions       = 3        # times every combination runs; the report shows the median
 idle_after_load   = 0        # seconds to wait after the load and then read the memory
                              # the table keeps; 0: do not
@@ -18,6 +23,14 @@ standard = 0                 # COMMUNITIES values
 extended = 0                 # extended communities (route targets)
 large    = 0                 # large communities
 order    = "sorted"          # order of the values in the UPDATE: sorted | random | reversed
+unique   = false             # true: every route also carries a large community of its own, so
+                             # no two routes have the same attributes and gobgpd cannot pack
+                             # them into one UPDATE when it sends them on
+groups   = 0                 # >0: every route falls into one of that many groups at random, once
+                             # for the run; the routes of a group carry a large community of the
+                             # group and nothing else differs, so gobgpd can pack them into one
+                             # UPDATE; every round sends the routes one by one in a new random
+                             # order. Needs routes_per_update = 1 and unique = false
 
 # After the load the sender announces the same routes again, `rounds` times.
 [storm]
@@ -25,6 +38,8 @@ rounds = 0                   # 0: the load alone
 resend = "same"              # what a round sends for every route:
                              #   same                  the same bytes
                              #   changed               another MED: the route really changes
+                             #   changed-community     another COMMUNITIES value: a change gobgpd passes
+                             #                         on to an eBGP peer, which MED is not
                              #   standard-reversed     the same route, COMMUNITIES values in reverse order
                              #   extended-reversed     the same route, extended values in reverse order
                              #   large-reversed        the same route, large values in reverse order

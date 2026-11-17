@@ -10,18 +10,24 @@
   [neighbors.config]
     neighbor-address = "127.0.0.1"
     peer-as = 100
+    {neighbor_config}
   [neighbors.transport.config]
     passive-mode = true
+  {graceful_restart}
   [[neighbors.afi-safis]]
     [neighbors.afi-safis.config]
       afi-safi-name = "{family}"
+    {afi_safi_graceful_restart}
 
 [[neighbors]]
   [neighbors.config]
     neighbor-address = "{sink_addr}"
     peer-as = 300
+    {neighbor_config}
   [neighbors.transport.config]
     passive-mode = true
+  {graceful_restart}
   [[neighbors.afi-safis]]
     [neighbors.afi-safis.config]
       afi-safi-name = "{family}"
+    {afi_safi_graceful_restart}

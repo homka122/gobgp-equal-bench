@@ -13,6 +13,8 @@ import (
 //
 //	same                  the same bytes
 //	changed               another MED every round: the route really changes
+//	changed-community     another COMMUNITIES value every round: a change that
+//	                      gobgpd passes on to an eBGP peer, which MED is not
 //	standard-reversed     the COMMUNITIES values in reverse order
 //	extended-reversed     the extended community values in reverse order
 //	large-reversed        the large community values in reverse order
@@ -22,7 +24,7 @@ import (
 // The four reorderings keep the route the same and change only its encoding.
 // They apply to every other round, the load included, so that each round
 // differs from the one before.
-var resends = []string{"same", "changed", "standard-reversed", "extended-reversed", "large-reversed", "attributes-reordered", "changed-reordered"}
+var resends = []string{"same", "changed", "changed-community", "standard-reversed", "extended-reversed", "large-reversed", "attributes-reordered", "changed-reordered"}
 
 // communitySet is the community values every route carries: distinct values
 // (COMMUNITIES 65000:x, route targets 65000:x, large 65000:1:x) in the order
@@ -83,7 +85,7 @@ func shuffle[T any](r *rand.Rand, s []T, sorted func([]T) bool) {
 // supports tells whether the set has the values the resend needs.
 func (c *communitySet) supports(resend string) error {
 	need := map[string]int{
-		"same": 0, "changed": 0, "attributes-reordered": 1 - len(c.standard),
+		"same": 0, "changed": 0, "changed-community": 0, "attributes-reordered": 1 - len(c.standard),
 		"standard-reversed": 2 - len(c.standard), "extended-reversed": 2 - len(c.extended), "large-reversed": 2 - len(c.large),
 		"changed-reordered": 2 - len(c.standard),
 	}
@@ -112,6 +114,9 @@ func (c *communitySet) attrs(fam bgp.Family, resend string, round int) []bgp.Pat
 		med = uint32(round)
 	}
 	standard, extended, large := c.standard, c.extended, c.large
+	if resend == "changed-community" {
+		standard = append(slices.Clone(standard), 65001<<16|uint32(round))
+	}
 	if other {
 		switch resend {
 		case "standard-reversed":
@@ -149,4 +154,19 @@ func (c *communitySet) attrs(fam bgp.Family, resend string, round int) []bgp.Pat
 		a = append([]bgp.PathAttributeInterface{a[i]}, slices.Delete(slices.Clone(a), i, i+1)...)
 	}
 	return a
+}
+
+// withOwn returns a with one more large community, 65000:2:i, that no other
+// UPDATE of the round has: routes with different attributes cannot share an
+// UPDATE when gobgpd sends them on.
+func withOwn(a []bgp.PathAttributeInterface, i int) []bgp.PathAttributeInterface {
+	own := bgp.NewLargeCommunity(65000, 2, uint32(i))
+	a = slices.Clone(a)
+	for k, x := range a {
+		if l, ok := x.(*bgp.PathAttributeLargeCommunities); ok {
+			a[k] = bgp.NewPathAttributeLargeCommunities(append(slices.Clone(l.Values), own))
+			return a
+		}
+	}
+	return append(a, bgp.NewPathAttributeLargeCommunities([]*bgp.LargeCommunity{own}))
 }

@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/osrg/gobgp/v4/pkg/packet/bgp"
@@ -19,14 +20,16 @@ import (
 const holdTime = 90
 
 type Session struct {
-	conn net.Conn
-	r    *bufio.Reader
-	mu   sync.Mutex
-	w    *bufio.Writer
+	conn   net.Conn
+	r      *bufio.Reader
+	mu     sync.Mutex
+	w      *bufio.Writer
+	closed atomic.Bool
 }
 
-// Dial connects from local to remote and exchanges OPEN and KEEPALIVE.
-func Dial(local, remote string, as uint32, id netip.Addr, families []bgp.Family) (*Session, error) {
+// Dial connects from local to remote and exchanges OPEN and KEEPALIVE. The
+// OPEN carries more capabilities after the multiprotocol ones, if given.
+func Dial(local, remote string, as uint32, id netip.Addr, families []bgp.Family, more ...bgp.ParameterCapabilityInterface) (*Session, error) {
 	d := net.Dialer{Timeout: 5 * time.Second}
 	if local != "" {
 		d.LocalAddr = &net.TCPAddr{IP: net.ParseIP(local)}
@@ -48,6 +51,7 @@ func Dial(local, remote string, as uint32, id netip.Addr, families []bgp.Family)
 	for _, f := range families {
 		caps = append(caps, bgp.NewCapMultiProtocol(f))
 	}
+	caps = append(caps, more...)
 	open, err := bgp.NewBGPOpenMessage(uint16(as), holdTime, id, []bgp.OptionParameterInterface{bgp.NewOptionParameterCapability(caps)})
 	if err != nil {
 		return nil, err
@@ -134,4 +138,12 @@ func (s *Session) Read() (*bgp.BGPMessage, error) {
 	return bgp.ParseBGPMessage(b)
 }
 
-func (s *Session) Close() error { return s.conn.Close() }
+// Close closes the TCP connection without a NOTIFICATION.
+func (s *Session) Close() error {
+	s.closed.Store(true)
+	return s.conn.Close()
+}
+
+// Closed reports whether Close was called: a read error after it is
+// expected.
+func (s *Session) Closed() bool { return s.closed.Load() }
