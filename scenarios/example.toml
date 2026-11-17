@@ -16,6 +16,8 @@ receiver_stall    = false    # true: the receivers read nothing after the load, 
 repetitions       = 3        # times every combination runs; the report shows the median
 idle_after_load   = 0        # seconds to wait after the load and then read the memory
                              # the table keeps; 0: do not
+hold_time         = 90       # Hold Time the test peers offer, s; gobgpd takes the smaller
+                             # of it and its own 90
 
 # Community values every route carries.
 [communities]
@@ -46,6 +48,17 @@ resend = "same"              # what a round sends for every route:
                              #   attributes-reordered  the same route, COMMUNITIES before the other attributes
                              #   changed-reordered     another MED and all four reorderings at once
                              # The reorderings alternate with the original form from round to round.
+
+# After the load: peer A (flapper), one more receiver, goes away and comes back, and gobgpd
+# sends it the whole table each time. Meanwhile the sender announces probe routes, and the
+# first receiver records how long each took through gobgpd. 0 seconds: no such phase.
+[flap]
+seconds    = 0               # how long the phase lasts
+interval   = 0               # A drops its session, without a NOTIFICATION, this many seconds
+                             # after it came up, and connects again; 0: A stays up
+retry      = 1               # seconds between the attempts of A while gobgpd refuses it
+probe_rate = 100             # probe routes the sender announces per second, each a /32 of its
+                             # own in 198.19.0.0/16; at most 65536 in the phase
 
 # How gobgpd and the test peers run.
 [runtime]

@@ -68,11 +68,18 @@ Every run starts a fresh gobgpd (AS 200) with its peers on the same machine:
   announcement looks like byte by byte;
 - a **receiver** (`sink`, AS 300) counts the routes gobgpd sends it and drops them; with
   `receiver_rate` it takes only so many routes per second, as a slow peer does.
+- with `[flap]`, **peer A** (`flapper`, AS 300) is one more receiver that drops its session
+  and connects again, so that gobgpd sends it the whole table each time.
 
 A run has two phases:
 
 1. **load**: the sender announces the table for the first time;
 2. **storm**: it announces the same routes again, `storm.rounds` times, as `storm.resend` says.
+
+With `[flap]` a third phase follows: the sender announces probe routes at a steady rate, each
+with the time it was sent, while peer A stays up or flaps; the receiver records how long every
+probe took through gobgpd. The phase shows how much the full tables that gobgpd sends A delay
+the routes of the other peers.
 
 A phase ends when a marker route sent after it reaches every receiver, and then one more: gobgpd
 handles the UPDATEs of a peer in order, so by then it has done all the work of the phase. The run

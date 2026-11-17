@@ -5,6 +5,7 @@ import (
 	"math/rand/v2"
 	"net/netip"
 	"slices"
+	"time"
 
 	"github.com/osrg/gobgp/v4/pkg/packet/bgp"
 )
@@ -160,13 +161,24 @@ func (c *communitySet) attrs(fam bgp.Family, resend string, round int) []bgp.Pat
 // UPDATE of the round has: routes with different attributes cannot share an
 // UPDATE when gobgpd sends them on.
 func withOwn(a []bgp.PathAttributeInterface, i int) []bgp.PathAttributeInterface {
-	own := bgp.NewLargeCommunity(65000, 2, uint32(i))
+	return withLarge(a, bgp.NewLargeCommunity(65000, 2, uint32(i)))
+}
+
+// withStamp returns a with one more large community that carries t:
+// 65001:<high 32 bits>:<low 32 bits> of its Unix time in nanoseconds. sink
+// reads it from a probe to tell how long the probe took through gobgpd.
+func withStamp(a []bgp.PathAttributeInterface, t time.Time) []bgp.PathAttributeInterface {
+	ns := uint64(t.UnixNano())
+	return withLarge(a, bgp.NewLargeCommunity(65001, uint32(ns>>32), uint32(ns)))
+}
+
+func withLarge(a []bgp.PathAttributeInterface, c *bgp.LargeCommunity) []bgp.PathAttributeInterface {
 	a = slices.Clone(a)
 	for k, x := range a {
 		if l, ok := x.(*bgp.PathAttributeLargeCommunities); ok {
-			a[k] = bgp.NewPathAttributeLargeCommunities(append(slices.Clone(l.Values), own))
+			a[k] = bgp.NewPathAttributeLargeCommunities(append(slices.Clone(l.Values), c))
 			return a
 		}
 	}
-	return append(a, bgp.NewPathAttributeLargeCommunities([]*bgp.LargeCommunity{own}))
+	return append(a, bgp.NewPathAttributeLargeCommunities([]*bgp.LargeCommunity{c}))
 }

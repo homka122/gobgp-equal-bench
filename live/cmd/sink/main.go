@@ -1,7 +1,8 @@
 // sink is the downstream peer of the gobgpd under test. It counts the routes
 // gobgpd sends it and serves the counters as JSON on -http. Routes in
 // 198.18.0.0/16 are the markers of blaster: they are not counted, Marker is
-// the highest third octet seen. With -rate it is a slow peer: it takes that
+// the highest third octet seen. Routes in 198.19.0.0/16 are its probes: they
+// are not counted either, /probes lists when each was sent and when it came. With -rate it is a slow peer: it takes that
 // many routes per second and leaves the rest to queue in gobgpd. With
 // -stall-at it is a peer that hangs: once it has marker K it reads nothing
 // more, but keeps sending KEEPALIVEs, so gobgpd keeps the session.
@@ -113,7 +114,25 @@ func routeHash(attrs uint64, p netip.Prefix) uint64 {
 	return h.Sum64()
 }
 
-var markers = netip.MustParsePrefix("198.18.0.0/16")
+var (
+	markers = netip.MustParsePrefix("198.18.0.0/16")
+	probes  = netip.MustParsePrefix("198.19.0.0/16")
+)
+
+// stamp returns the time blaster put into a probe (withStamp), in Unix
+// nanoseconds, or 0.
+func stamp(u *bgp.BGPUpdate) int64 {
+	for _, a := range u.PathAttributes {
+		if l, ok := a.(*bgp.PathAttributeLargeCommunities); ok {
+			for _, c := range l.Values {
+				if c.ASN == 65001 {
+					return int64(uint64(c.LocalData1)<<32 | uint64(c.LocalData2))
+				}
+			}
+		}
+	}
+	return 0
+}
 
 func prefix(nlri bgp.NLRI) netip.Prefix {
 	switch n := nlri.(type) {
@@ -143,7 +162,9 @@ func main() {
 	keep := flag.Bool("table", false, "keep the routes and report the table")
 	llgr := flag.Bool("llgr", false, "advertise the Graceful Restart and Long-Lived Graceful Restart Capabilities")
 	stallAt := flag.Int("stall-at", 0, "stop reading once this marker has come; 0: never")
+	hold := flag.Int("hold", 90, "Hold Time to offer, s")
 	flag.Parse()
+	speaker.HoldTime = uint16(*hold)
 	fam := bgp.RF_IPv4_UC
 	if *family == "vpnv4" {
 		fam = bgp.RF_IPv4_VPN
@@ -152,6 +173,7 @@ func main() {
 	var mu sync.Mutex
 	var st stats
 	tab := table{routes: map[netip.Prefix]route{}}
+	var probed [][2]int64 // [sent, came], Unix nanoseconds
 	http.HandleFunc("/stats", func(w http.ResponseWriter, _ *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
@@ -159,6 +181,14 @@ func main() {
 			st.Table, st.TableLLGRStale, st.TableDigest = len(tab.routes), tab.stale, fmt.Sprintf("%016x", tab.digest)
 		}
 		json.NewEncoder(w).Encode(st)
+	})
+	http.HandleFunc("/probes", func(w http.ResponseWriter, _ *http.Request) {
+		// copy under the lock and write without it: the reader of the
+		// session must not wait for the HTTP client
+		mu.Lock()
+		got := slices.Clone(probed)
+		mu.Unlock()
+		json.NewEncoder(w).Encode(got)
 	})
 	go func() { log.Fatal(http.ListenAndServe(*addr, nil)) }()
 
@@ -209,6 +239,8 @@ func main() {
 		for _, n := range reach {
 			if k := marker(n.NLRI); k >= 0 {
 				st.Marker = max(st.Marker, k)
+			} else if probes.Contains(prefix(n.NLRI).Addr()) {
+				probed = append(probed, [2]int64{stamp(u), now})
 			} else {
 				st.NLRI++
 				if *keep {
@@ -223,7 +255,7 @@ func main() {
 			}
 		}
 		for _, n := range unreach {
-			if marker(n.NLRI) < 0 {
+			if marker(n.NLRI) < 0 && !probes.Contains(prefix(n.NLRI).Addr()) {
 				st.Withdrawn++
 				if *keep {
 					tab.del(prefix(n.NLRI))

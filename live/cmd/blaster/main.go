@@ -7,6 +7,9 @@
 //	load        announce all routes once
 //	storm R     announce all routes R more times, as -resend says
 //	mark K      announce the marker route 198.18.K.0/24
+//	probe R S   announce R probe routes per second for S seconds: each is
+//	            a /32 of its own in 198.19.0.0/16 and carries the time it
+//	            was sent (withStamp)
 //	eor         send the End-of-RIB marker
 //	down        close the TCP connection without a NOTIFICATION
 //	up          connect again as a restarting speaker and announce all
@@ -60,12 +63,14 @@ var (
 		"the routes of a group share a large community of their own, and each time the routes are announced it is one "+
 		"by one in a new random order; 0: no groups")
 	resend   = flag.String("resend", "same", "what a storm round sends: "+strings.Join(resends, ", "))
+	hold     = flag.Int("hold", 90, "Hold Time to offer, s")
 	grTime   = flag.Int("gr-restart-time", 0, "Restart Time of the Graceful Restart Capability, s; 0: no capability")
 	llgrTime = flag.Int("llgr-stale-time", 0, "Long-Lived Stale Time, s; 0: no Long-Lived Graceful Restart Capability")
 )
 
 func main() {
 	flag.Parse()
+	speaker.HoldTime = uint16(*hold)
 	set, err := newCommunitySet(*standard, *extended, *large, *order, *seed)
 	if err != nil {
 		log.Fatal(err)
@@ -136,6 +141,10 @@ func main() {
 			// so everything is sent when the next marker arrives.
 			p := netip.PrefixFrom(netip.AddrFrom4([4]byte{198, 18, byte(arg), 0}), 24)
 			updates = announceMarker(s, fam, nlri(fam, p), set.attrs(fam, "same", 0))
+		case "probe":
+			var rate, secs int
+			fmt.Sscan(in.Text(), &cmd, &rate, &secs)
+			updates = probe(s, fam, set.attrs(fam, "same", 0), rate, secs)
 		case "quit":
 			s.Close()
 			return
@@ -249,6 +258,25 @@ func announceMarker(s *speaker.Session, fam bgp.Family, n bgp.PathNLRI, a []bgp.
 		log.Fatal(err)
 	}
 	return 1
+}
+
+// probe announces rate probe routes per second for secs seconds on a fixed
+// schedule, whatever gobgpd does with them.
+func probe(s *speaker.Session, fam bgp.Family, a []bgp.PathAttributeInterface, rate, secs int) int {
+	n := rate * secs
+	if rate <= 0 || n > 1<<16 {
+		log.Fatalf("probe %d %d: want a rate above 0 and at most 65536 probes", rate, secs)
+	}
+	start := time.Now()
+	for i := range n {
+		time.Sleep(time.Until(start.Add(time.Duration(i) * time.Second / time.Duration(rate))))
+		p := netip.PrefixFrom(netip.AddrFrom4([4]byte{198, 19, byte(i >> 8), byte(i)}), 32)
+		send(s, fam, []bgp.PathNLRI{nlri(fam, p)}, withStamp(a, time.Now()))
+		if err := s.Flush(); err != nil {
+			log.Fatal(err)
+		}
+	}
+	return n
 }
 
 func send(s *speaker.Session, fam bgp.Family, batch []bgp.PathNLRI, a []bgp.PathAttributeInterface) {

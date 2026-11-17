@@ -13,15 +13,19 @@ peer through a FIFO queue, so by then it has handled the whole phase and sent
 everything the phase caused. With receiver_stall the receivers read nothing
 after the load, so the storm ends instead when gobgpd has used no CPU for a
 second: it has handled every UPDATE of the storm, and what it could not send
-waits in its queues.
+waits in its queues. With [flap] a second receiver (flapper, peer A) joins,
+and after the load the sender sends probe routes at a steady rate while A
+either stays up or drops its session every few seconds, so that gobgpd sends
+it the whole table again each time; the first receiver records how long each
+probe took through gobgpd.
 Nothing polls gobgpd while it works: a /metrics scrape allocates ~160 KiB
 inside gobgpd and would show up in the numbers. Go memory stats are read once
 before and once after a phase (building that page allocates a little in
 gobgpd too; every run records how much as probe_alloc), GC cycles come from
 GODEBUG=gctrace=1 and RSS and CPU are read from outside by psutil.
 Every run is written to DIR/raw/<name>.json, DIR/env.json records the
-machine, the binary and the scenario. blaster and sink come from work/bin
-(scripts/build.sh).
+machine, the binary and the scenario. blaster, sink and flapper come from
+work/bin (scripts/build.sh).
 """
 
 import argparse
@@ -61,10 +65,11 @@ RESENDS = {  # resend -> (community kind it needs, how many values of it)
 ORDERS = ("sorted", "random", "reversed")
 DEFAULTS = {
     "family": "ipv4", "routes": 10000, "routes_per_update": 1, "receivers": 1, "receiver_rate": 0, "receiver_stall": False,
-    "repetitions": 3, "idle_after_load": 0,
+    "repetitions": 3, "idle_after_load": 0, "hold_time": 90,
     "communities": {"standard": 0, "extended": 0, "large": 0, "order": "sorted", "seed": 1, "unique": False, "groups": 0},
     "storm": {"rounds": 0, "resend": "same"},
     "restart": {"pause": 0, "restart_time": 15, "llgr_stale_time": 86400, "receiver_llgr": False},
+    "flap": {"seconds": 0, "interval": 0, "retry": 1, "probe_rate": 100},
     "runtime": {"gomaxprocs": 2, "gogc": "", "gomemlimit": "", "gobgpd_cpus": "0,1", "sender_cpus": "2,3", "receiver_cpus": "2,3",
                 "cpu_profile_seconds": 0, "log_level": "warn"},
 }
@@ -147,6 +152,8 @@ def load_scenario(path):
     cfg["storm"] = table(cfg["storm"], DEFAULTS["storm"], "storm.")
     cfg["runtime"] = table(cfg["runtime"], DEFAULTS["runtime"], "runtime.")
     cfg["restart"] = table(cfg["restart"], DEFAULTS["restart"], "restart.")
+    cfg["flap"] = fl = table(cfg["flap"], DEFAULTS["flap"], "flap.")
+    intervals = (fl["interval"] if isinstance(fl["interval"], list) else [fl["interval"]]) if fl["seconds"] else [0]
     rs = cfg["restart"]
     pauses = rs["pause"] if isinstance(rs["pause"], list) else [rs["pause"]]
     llgrs = rs["receiver_llgr"] if isinstance(rs["receiver_llgr"], list) else [rs["receiver_llgr"]]
@@ -159,13 +166,20 @@ def load_scenario(path):
         if c["groups"] and (c["unique"] or cfg["routes_per_update"] != 1):
             fail("communities.groups needs routes_per_update = 1 and unique = false")
     rounds = cfg["storm"]["rounds"]
+    if cfg["hold_time"] != 0 and not 3 <= cfg["hold_time"] <= 65535:
+        fail("hold_time must be 0 or 3 to 65535 s (RFC 4271)")
+    if fl["seconds"]:
+        if any(x > 0 for x in pauses) or cfg["receiver_stall"]:
+            fail("[flap] does not go with [restart] or receiver_stall")
+        if not 0 < fl["probe_rate"] * fl["seconds"] <= 65536:
+            fail("flap.probe_rate * flap.seconds must be 1 to 65536: every probe is a /32 of its own in 198.19.0.0/16")
     if cfg["receiver_stall"] and (not rounds or any(x > 0 for x in pauses)):
         fail("receiver_stall needs storm.rounds > 0 and no [restart]")
     resends = choice(cfg["storm"]["resend"], list(RESENDS), "storm.resend") if rounds else ["same"]
     receivers = cfg["receivers"] if isinstance(cfg["receivers"], list) else [cfg["receivers"]]
     combos = []
-    for family, comm, k, resend, pause, llgr in itertools.product(
-            choice(cfg["family"], list(AFI_SAFI), "family"), sets, receivers, resends, pauses, llgrs):
+    for family, comm, k, resend, pause, llgr, interval in itertools.product(
+            choice(cfg["family"], list(AFI_SAFI), "family"), sets, receivers, resends, pauses, llgrs, intervals):
         if need := RESENDS[resend]:
             if comm[need[0]] < need[1]:
                 fail(f"storm.resend = {resend!r} needs communities.{need[0]} >= {need[1]}")
@@ -173,7 +187,9 @@ def load_scenario(path):
                        "receivers": k, "receiver_rate": cfg["receiver_rate"], "receiver_stall": cfg["receiver_stall"],
                        "communities": comm,
                        "rounds": rounds, "resend": resend, "idle_after_load": cfg["idle_after_load"],
-                       "restart": {**rs, "pause": pause, "receiver_llgr": llgr} if pause > 0 else None})
+                       "hold_time": cfg["hold_time"],
+                       "restart": {**rs, "pause": pause, "receiver_llgr": llgr} if pause > 0 else None,
+                       "flap": {**fl, "interval": interval} if fl["seconds"] else None})
     return cfg, combos
 
 
@@ -182,7 +198,8 @@ def label(sc):
     return (f"{sc['family']}_{sc['resend'] if sc['rounds'] else 'load'}_"
             f"{c['standard']}-{c['extended']}-{c['large']}-{c['order']}{'-unique' if c['unique'] else ''}"
             f"{f'-groups{g}' if (g := c['groups']) else ''}_{sc['receivers']}rx{'-stall' if sc['receiver_stall'] else ''}"
-            + (f"_restart{r['pause']:g}s{'-llgr' if r['receiver_llgr'] else ''}" if (r := sc["restart"]) else ""))
+            + (f"_restart{r['pause']:g}s{'-llgr' if r['receiver_llgr'] else ''}" if (r := sc["restart"]) else "")
+            + ((f"_flap{f['interval']:g}s" if f["interval"] else "_steady") if (f := sc["flap"]) else ""))
 
 
 def dut_config(family, sinks, neighbor_config="", restart=None):
@@ -227,9 +244,12 @@ class Run:
         self.rt = rt
         family = sc["family"]
         conf = workdir / "dut.toml"
-        addrs = sink_addrs(args.sink_addr, sc["receivers"])
+        flap = sc["flap"]
+        addrs = sink_addrs(args.sink_addr, sc["receivers"] + (1 if flap else 0))
         restart = sc["restart"]
         conf.write_text(dut_config(family, addrs, args.neighbor_config, restart))
+        self.a_addr, addrs = (addrs[-1], addrs[:-1]) if flap else (None, addrs)
+        hold = ["-hold", str(sc["hold_time"])]
         self.workdir = workdir
         cmd = [str(args.gobgpd), "-f", str(conf), "--api-hosts", "127.0.0.1:10150",
                "--pprof-host", "127.0.0.1:10160", "--metrics-path", "", "--log-level", rt["log_level"]]
@@ -242,18 +262,25 @@ class Run:
             env["GOMEMLIMIT"] = str(rt["gomemlimit"])
         self.log = open(workdir / "dut.log", "w")
         self.dut = subprocess.Popen(cmd, env=env, stdout=self.log, stderr=subprocess.PIPE, text=True)
+        self.blaster, self.sinks, self.flapper = None, [], None
+        try:
+            self.start_peers(sc, rt, family, addrs, restart, hold)
+        except BaseException:
+            self.close()  # run_one has no Run to close yet
+            raise
+
+    def start_peers(self, sc, rt, family, addrs, restart, hold):
         self.stderr = []  # [arrival time, line]; gctrace lines come as the GC ends
         threading.Thread(target=self.read_stderr, daemon=True).start()
         self.proc = psutil.Process(self.dut.pid)  # taskset execs gobgpd in place
         wait_for(memstats)
         receivers, sender = self.pin(rt["receiver_cpus"]), self.pin(rt["sender_cpus"])
-        self.sinks = []
         for i, a in enumerate(addrs):
             host = f"[{a}]" if ":" in a else a
             self.sinks.append(subprocess.Popen(
                 receivers + [str(BIN / "sink"), "-family", family, "-local", a, "-remote", f"{host}:10179",
                          "-http", f"127.0.0.1:{SINK_HTTP_PORT + i}", "-id", f"3.3.{i // 256}.{i % 256 + 3}",
-                         "-rate", str(sc["receiver_rate"])]
+                         "-rate", str(sc["receiver_rate"])] + hold
                 # the load ends with markers 1 and 2: a stalled receiver reads up to there
                 + (["-stall-at", "2"] if sc["receiver_stall"] else [])
                 + (["-table"] if restart else []) + (["-llgr"] if restart and restart["receiver_llgr"] else []),
@@ -264,12 +291,20 @@ class Run:
                      "-per-update", str(sc["routes_per_update"]), "-resend", sc["resend"],
                      "-standard", str(c["standard"]), "-extended", str(c["extended"]), "-large", str(c["large"]),
                      "-order", c["order"], "-seed", str(c["seed"])] + (["-unique"] if c["unique"] else []) + ["-groups", str(c["groups"])]
+            + hold
             + (["-gr-restart-time", str(restart["restart_time"]), "-llgr-stale-time", str(restart["llgr_stale_time"])]
                if restart else []),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.log, text=True)
         assert self.reply()["ready"]
         for i in range(len(addrs)):
             wait_for(lambda: sink(i)["established"])
+        if sc["flap"]:
+            self.flapper = subprocess.Popen(
+                receivers + [str(BIN / "flapper"), "-family", family, "-local", self.a_addr, "-remote", "127.0.0.1:10179",
+                             "-routes", str(sc["routes"])] + hold,
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.log, text=True)
+            if not (line := self.flapper.stdout.readline()) or not json.loads(line)["ready"]:
+                raise RuntimeError("flapper did not come up, see dut.log")
         self.marker = 0
         # what one memstats() call allocates inside gobgpd; the snapshot
         # before a phase adds this much to the phase
@@ -509,6 +544,113 @@ class Run:
                 "series": [x for x in samples if x[0] <= end - start], "series_fields": ["t", "rss"] + list(keys) + ["last_unix_nano"],
                 "log": self.gr_log()}
 
+    def flap(self, f):
+        """The sender sends f["probe_rate"] probe routes a second for
+        f["seconds"] seconds; meanwhile peer A (flapper) stays up or, with
+        f["interval"], drops its session that many seconds after it came up
+        and connects again, every f["retry"] seconds while gobgpd refuses.
+        Then the markers. Each probe carries the time it was sent; the first
+        receiver records when it came. Times are seconds from the start."""
+        samples, stop = [], threading.Event()
+
+        def sample():
+            while not stop.is_set():
+                try:
+                    samples.append([round(time.time() - start, 3), self.proc.memory_info().rss])
+                except psutil.Error:
+                    pass
+                stop.wait(0.1)
+
+        def progress():
+            # one line every 5 s: the probes of the last 5 s, the sessions of
+            # A so far and the sessions gobgpd dropped other than A's
+            seen = 0
+            while not stop.wait(5):
+                try:
+                    got = json.loads(get(f"http://127.0.0.1:{SINK_HTTP_PORT}/probes"))
+                    lat = [(c - s) / 1e9 for s, c in got[seen:]]
+                    seen = len(got)
+                    up, other = self.peer_events()
+                    rss = self.proc.memory_info().rss
+                except (OSError, psutil.Error) as e:
+                    print(f"  · {time.time() - start:5.0f}s no progress: {e}", flush=True)
+                    continue
+                print(f"  · {time.time() - start:5.0f}s probes {len(got)}, last 5 s: {len(lat)} came, max delay "
+                      f"{max(lat, default=0):.2f}s; A up {up} times; other peers down {other}; "
+                      f"rss {rss / 2**20:.0f} MiB", flush=True)
+
+        before = self.snapshot()
+        start = time.time()
+        th = threading.Thread(target=sample, daemon=True)
+        th.start()
+        pr = threading.Thread(target=progress, daemon=True)
+        pr.start()
+        try:
+            self.flapper.stdin.write(f"flap {f['interval']} {f['seconds']} {f['retry']}\n")
+            self.flapper.stdin.flush()
+            try:
+                sent = self.send(f"probe {f['probe_rate']} {f['seconds']}")
+            except (RuntimeError, OSError):
+                # gobgpd dropped the session of the sender: that is a result
+                sent = {"updates": f["probe_rate"] * f["seconds"]}  # planned, not sent
+            line = self.flapper.stdout.readline()
+            if not line:
+                raise RuntimeError("flapper exited, see dut.log")
+            sessions = json.loads(line)["sessions"]
+            # the sender and the receivers end themselves when their session
+            # ends; the markers also wait out the stall the phase ends in
+            def alive():
+                return self.blaster.poll() is None and all(x.poll() is None for x in self.sinks)
+            end = time.time()
+            if alive():
+                try:
+                    end = self.wait_marker()
+                except (RuntimeError, OSError):
+                    pass
+            kept = alive()
+            t = self.proc.cpu_times()
+            after = {"cpu": t.user + t.system, "rss": self.proc.memory_info().rss}
+        finally:
+            stop.set()
+            th.join()
+            pr.join()
+        try:
+            probes = json.loads(get(f"http://127.0.0.1:{SINK_HTTP_PORT}/probes"))
+        except OSError:
+            probes = []  # gobgpd dropped the session of the receiver
+        series = sorted([round(s / 1e9 - start, 3), round((c - s) / 1e9, 4)] for s, c in probes)
+        lat = sorted(x[1] for x in series)
+
+        def q(p):
+            return lat[min(len(lat) - 1, int(p * len(lat)))] if lat else None
+
+        def since(ns):
+            return round(ns / 1e9 - start, 3) if ns else None
+
+        return {"seconds": end - start, "sent_probes": sent["updates"], "probes": len(series),
+                "latency": {"p50": q(0.5), "p90": q(0.9), "p99": q(0.99), "max": lat[-1] if lat else None,
+                            "over_1s": sum(x > 1 for x in lat), "over_100ms": sum(x > 0.1 for x in lat)},
+                "probe_series": series, "series_fields": ["sent", "latency"],
+                "sessions": [{"up": since(x["up_unix_nano"]), "full": since(x.get("full_unix_nano")),
+                              "down": since(x.get("down_unix_nano")), "routes": x["routes"], "attempts": x["attempts"],
+                              "dropped_by_peer": x.get("dropped_by_peer", False)} for x in sessions],
+                "peers_kept": kept,
+                "peers_down": self.peer_events()[1],
+                "rss_peak": max([x[1] for x in samples] + [after["rss"]]), "rss_end": after["rss"],
+                "rss_series": [x for x in samples if x[0] <= end - start],
+                "cpu": after["cpu"] - before["cpu"], "log": self.gr_log()}
+
+    def peer_events(self):
+        """From the gobgpd log: how many times the session of A came up, and
+        how many sessions of the other peers ended."""
+        up = other = 0
+        for line in (self.workdir / "dut.log").read_text().splitlines():
+            if '"Peer Up"' in line and f'"{self.a_addr}"' in line:
+                up += 1
+            elif '"Peer Down"' in line and f'"{self.a_addr}"' not in line:
+                other += 1
+        return up, other
+
     def gr_log(self):
         """The lines of the gobgpd log about the sessions and graceful
         restart."""
@@ -516,9 +658,10 @@ class Run:
         return [line[:400] for line in lines if GR_LOG.search(line) and not line.startswith("gc ")][:200]
 
     def close(self):
-        for p in [self.blaster] + self.sinks + [self.dut]:
-            p.kill()
-            p.wait()
+        for p in [self.blaster, *self.sinks, self.flapper, self.dut]:
+            if p:
+                p.kill()
+                p.wait()
         self.log.close()
 
 
@@ -527,11 +670,14 @@ def run_one(sc, rt, args, profile=None):
     with tempfile.TemporaryDirectory() as d:
         r = Run(sc, rt, args, Path(d))
         try:
+            print(f"  · load of {sc['routes']} routes", flush=True)
             load = r.phase("load", (profile, rt["cpu_profile_seconds"]) if profile else None,
                            then=("eor",) if sc["restart"] else ())
+            print(f"  · load done in {load['seconds']:.1f}s, peak rss {load['rss_peak'] / 2**20:.0f} MiB", flush=True)
             idle = r.settle(sc["idle_after_load"]) if sc["idle_after_load"] else None
             storm = r.phase(f"storm {sc['rounds']}", idle=sc["receiver_stall"]) if sc["rounds"] else None
             restart = r.restart(sc["restart"]) if sc["restart"] else None
+            flap = r.flap(sc["flap"]) if sc["flap"] else None
         except Exception:
             logs = (Path(d) / "dut.log").read_text().splitlines() + [line for _, line in r.stderr]
             print("\n".join(line for line in logs if not line.startswith("gc "))[-2000:], file=sys.stderr)
@@ -539,8 +685,10 @@ def run_one(sc, rt, args, profile=None):
         finally:
             r.close()
     check(load, storm, sc)
+    if flap and flap["peers_kept"]:
+        assert flap["probes"] == flap["sent_probes"], f"the receiver got {flap['probes']} of {flap['sent_probes']} probes"
     return {"scenario": sc, "probe_alloc": r.probe_alloc, "load": load, "idle": idle, "storm": storm,
-            "restart": restart, "started": started, "ended": time.time()}
+            "restart": restart, "flap": flap, "started": started, "ended": time.time()}
 
 
 def check(load, storm, sc):
@@ -657,6 +805,15 @@ def main():
             res["rep"] = rep
             (raw / f"{name}.json").write_text(json.dumps(res))
             done += 1
+            if fl := res["flap"]:
+                lt, ss = fl["latency"], fl["sessions"]
+                dumps = [x["full"] - x["up"] for x in ss if x["full"] is not None]
+                print(f"[{done}/{total}] {name}: probes {fl['probes']}/{fl['sent_probes']}, latency p50 {lt['p50'] or 0:.3f}s "
+                      f"p99 {lt['p99'] or 0:.3f}s max {lt['max'] or 0:.3f}s, over 1 s {lt['over_1s']}; A sessions {len(ss)}, "
+                      f"full table in {min(dumps, default=0):.1f}-{max(dumps, default=0):.1f}s; peers kept {fl['peers_kept']}, "
+                      f"other sessions down {fl['peers_down']}; "
+                      f"peak rss {fl['rss_peak'] / 2**20:.0f} MiB, cpu {fl['cpu']:.1f}s", flush=True)
+                continue
             if rs := res["restart"]:
                 w = rs["windows"]
                 print(f"[{done}/{total}] {name}: load peak rss {res['load']['rss_peak'] / 2**20:.0f} MiB; restart peak rss "
