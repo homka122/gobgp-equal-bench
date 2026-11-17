@@ -1,0 +1,25 @@
+# The sender restarts gracefully, as a peer that is restarted does: it loads
+# 500 000 routes and End-of-RIB, drops the session without a NOTIFICATION,
+# comes back after a pause as a restarting speaker and announces the same
+# routes again. Graceful restart with a Restart Time of 15 s and long-lived
+# graceful restart with a stale time of 1 day, as configured in production.
+# The receiver reads 20 000 routes per second, so the routes the restart
+# causes wait in the queue of gobgpd for that peer.
+family            = "ipv4"
+routes            = 500000
+routes_per_update = 1
+receivers         = 1
+receiver_rate     = 20000
+repetitions       = 3
+
+[communities]
+unique = true                # so that gobgpd cannot pack many routes into one UPDATE
+
+[restart]
+pause           = 16           # back while the long-lived stale routes still wait in the queue
+restart_time    = 15
+llgr_stale_time = 86400
+receiver_llgr   = [false, true] # whether the receiver supports long-lived graceful restart
+
+[runtime]
+log_level = "info"           # the graceful restart lines of the gobgpd log go into the results
