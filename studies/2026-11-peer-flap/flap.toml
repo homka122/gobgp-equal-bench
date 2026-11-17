@@ -1,0 +1,22 @@
+# A - T - B: gobgpd T has a table of 1 500 000 routes from the sender B and
+# sends them on to the receiver C and to peer A. Then for 60 s B announces
+# 100 probe routes a second while A either stays up (steady) or drops its
+# session 1 s after it came up and tries to connect again every 1 s (flap1s).
+# C records how long each probe took through T. The peers offer a Hold Time of
+# 3 s, the least RFC 4271 allows: a session of B or C ends if T reads nothing
+# from it for 3 s.
+family            = "ipv4"
+routes            = 1500000
+routes_per_update = 1
+receivers         = 1
+repetitions       = 3
+hold_time         = 3
+
+[communities]
+unique = true                # so that T cannot pack many routes into one UPDATE
+
+[flap]
+seconds    = 60
+interval   = [0, 1]
+retry      = 1
+probe_rate = 100
