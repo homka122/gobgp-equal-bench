@@ -45,23 +45,23 @@ def cell(values, fmt):
 
 
 def seconds(x):
-    return f"{x * 1000:.0f} мс" if x < 1 else f"{x:.1f} с".replace(".", ",")
+    return f"{x * 1000:.0f} ms" if x < 1 else f"{x:.1f} s"
 
 
 def summary():
     rows = [
-        ("задержка проб, медиана", lambda f: f["latency"]["p50"], seconds),
-        ("задержка проб, 99-й перцентиль", lambda f: f["latency"]["p99"], seconds),
-        ("задержка проб, максимум", lambda f: f["latency"]["max"], seconds),
-        ("пробы дошли до C", lambda f: f["probes"] / f["sent_probes"], lambda x: f"{x:.0%}"),
+        ("probe delay, median", lambda f: f["latency"]["p50"], seconds),
+        ("probe delay, 99th percentile", lambda f: f["latency"]["p99"], seconds),
+        ("probe delay, max", lambda f: f["latency"]["max"], seconds),
+        ("probes that reached C", lambda f: f["probes"] / f["sent_probes"], lambda x: f"{x:.0%}"),
         # peers_down: sessions T ended; peers_kept: B and C did not end theirs
-        ("сессий B и C оборвалось", lambda f: max(f["peers_down"], 0 if f["peers_kept"] else 1), lambda x: f"{x:.0f}"),
+        ("sessions of B and C that ended", lambda f: max(f["peers_down"], 0 if f["peers_kept"] else 1), lambda x: f"{x:.0f}"),
         # the first session of A came up before the phase
-        ("подъёмов A за 60 с", lambda f: sum(x["up"] > 0 for x in f["sessions"]), lambda x: f"{x:.0f}"),
-        ("пиковый RSS gobgpd", lambda f: f["rss_peak"] / GIB, lambda x: f"{x:.1f} ГиБ".replace(".", ",")),
+        ("times A came up in 60 s", lambda f: sum(x["up"] > 0 for x in f["sessions"]), lambda x: f"{x:.0f}"),
+        ("peak RSS of gobgpd", lambda f: f["rss_peak"] / GIB, lambda x: f"{x:.1f} GiB"),
     ]
     steady, flap = runs("steady"), runs("flap")
-    lines = ["| | A подключён | A моргает |", "|---|---|---|"]
+    lines = ["| | A stays up | A flaps |", "|---|---|---|"]
     for what, get, fmt in rows:
         lines.append(f"| {what} | {cell([get(f) for f in steady], fmt)} | {cell([get(f) for f in flap], fmt)} |")
     return "\n".join(lines) + "\n"
@@ -86,14 +86,14 @@ def topology(path):
     ax.set_xlim(-0.8, 13.8)
     ax.set_ylim(-0.6, 2.6)
     ax.axis("off")
-    box(ax, 1.1, 1.9, "B", "отправитель (blaster)\n1,5 млн маршрутов и пробы")
-    box(ax, 6.5, 1.9, "T", "gobgpd под тестом\nmaster f7daa917, 2 ядра")
-    box(ax, 11.9, 1.9, "C", "приёмник (sink)\nмеряет задержку проб")
-    box(ax, 6.5, 0.1, "A", "приёмник (flapper)\nрвёт сессию через 1 с", color=FLAP)
-    arrow(ax, 2.85, 1.9, 4.75, 1.9, "100 проб/с")
-    arrow(ax, 8.25, 1.9, 10.15, 1.9, "пробы")
+    box(ax, 1.1, 1.9, "B", "sender (blaster)\n1.5 M routes and probes")
+    box(ax, 6.5, 1.9, "T", "gobgpd under test\nmaster f7daa917, 2 CPUs")
+    box(ax, 11.9, 1.9, "C", "receiver (sink)\nrecords the probe delay")
+    box(ax, 6.5, 0.1, "A", "receiver (flapper)\ndrops its session after 1 s", color=FLAP)
+    arrow(ax, 2.85, 1.9, 4.75, 1.9, "100 probes/s")
+    arrow(ax, 8.25, 1.9, 10.15, 1.9, "probes")
     arrow(ax, 6.5, 1.35, 6.5, 0.65, "", color=FLAP, dashed=True)
-    ax.text(6.65, 1.0, "вся таблица при каждом подъёме A", ha="left", va="center", fontsize=8.5, color=FLAP)
+    ax.text(6.65, 1.0, "the whole table each time A comes up", ha="left", va="center", fontsize=8.5, color=FLAP)
     fig.savefig(path, dpi=150, bbox_inches="tight")
 
 
@@ -128,17 +128,17 @@ def delay(path):
     for lo, hi in held(flap):
         if hi > 0:
             ax.axvspan(max(lo, 0), min(hi, 60), color=BAND, zorder=0,
-                       label="T держит сессию A (Peer Up → Peer Down в его логе)" if first else None)
+                       label="T holds the session of A (Peer Up → Peer Down in its log)" if first else None)
             first = False
-    for f, color, name in ((flap, FLAP, "A моргает"), (steady, STEADY, "A подключён")):
+    for f, color, name in ((flap, FLAP, "A flaps"), (steady, STEADY, "A stays up")):
         t, d = zip(*f["probe_series"])
         ax.plot(t, d, color=color, linewidth=2, label=name)
     ax.set_xlim(0, 60)
     ax.set_ylim(0, None)
-    ax.set_xlabel("время отправки пробы, с", color=MUTED)
-    ax.set_ylabel("задержка пробы B → C, с", color=MUTED)
-    ax.set_title(f"Задержка маршрутов B через T, 1 500 000 маршрутов в таблице\n"
-                 f"повтор {flap['rep'] + 1} из 3, медианный по задержке", loc="left", color=INK, fontsize=12)
+    ax.set_xlabel("probe sent at, s", color=MUTED)
+    ax.set_ylabel("probe delay B → C, s", color=MUTED)
+    ax.set_title(f"Delay of the routes of B through T, 1 500 000 routes in the table\n"
+                 f"run {flap['rep'] + 1} of 3, the one with the median delay", loc="left", color=INK, fontsize=12)
     ax.grid(axis="y", color=GRID, linewidth=0.8)
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)
