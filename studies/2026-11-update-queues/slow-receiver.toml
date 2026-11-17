@@ -1,0 +1,15 @@
+# The same storm as flood.toml, but the receiver reads 20 000 routes per second,
+# slower than gobgpd sends. What gobgpd cannot send waits in its queue for that peer.
+family            = "ipv4"
+routes            = 10000
+routes_per_update = 1
+receivers         = 1
+receiver_rate     = 20000
+repetitions       = 3
+
+[communities]
+unique = true                # so that gobgpd cannot pack many routes into one UPDATE
+
+[storm]
+rounds = 100
+resend = "changed-community"
