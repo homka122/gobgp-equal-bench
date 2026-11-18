@@ -1,0 +1,20 @@
+# The control for own.toml and overlap.toml: the same table, phase and
+# GOMEMLIMIT, but A announces nothing and only flaps, as in 2026-11-peer-flap.
+family            = "ipv4"
+routes            = 1500000
+routes_per_update = 1
+receivers         = 1
+repetitions       = 3
+hold_time         = 3
+
+[communities]
+unique = true
+
+[flap]
+seconds    = 120
+interval   = 1
+retry      = 1
+probe_rate = 100
+
+[runtime]
+gomemlimit = "6GiB"

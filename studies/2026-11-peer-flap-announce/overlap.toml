@@ -1,0 +1,28 @@
+# A - T - B - C as in 2026-11-peer-flap: gobgpd T has 1 500 000 routes from
+# the sender B and sends them on to the receiver C and to peer A; B sends 100
+# probes a second and C records how long each took through T. Here A also
+# announces 100 000 routes on every session: the first 100 000 prefixes of B with a
+# shorter AS_PATH, so that they become the best paths of T. A either stays up
+# (steady) or drops its session 1 s after its routes went out (flap1s).
+family            = "ipv4"
+routes            = 1500000
+routes_per_update = 1
+receivers         = 1
+repetitions       = 3
+hold_time         = 3
+
+[communities]
+unique = true                # so that T cannot pack the routes of B into one UPDATE
+
+[flap]
+seconds    = 120
+interval   = [0, 1]
+retry      = 1
+probe_rate = 100
+announce   = 100000
+overlap    = true
+
+[runtime]
+gomemlimit = "6GiB"          # 75% of the 8 GiB of the Docker VM, as production sets GOMEMLIMIT:
+                             # without it the heap grows to twice the table before a GC and the
+                             # VM kills gobgpd
