@@ -8,11 +8,18 @@
 //	            keeps the session up
 //	quit
 //
+// With -announce K it also announces K routes of its own (ipv4 only) on the
+// session it has when flap comes and on every session after it, and counts
+// I from when the last of them went out: gobgpd reads them only after it has
+// sent the whole table. -overlap takes the prefixes of the routes of blaster
+// instead, with a shorter AS_PATH, so that they become the best paths.
+//
 // It prints {"ready": true} once the first session is up and one JSON line
 // when a command is done: the sessions it had during the command. A session
 // has when it came up, when all -routes routes of the table had come (the
-// markers and probes of blaster, 198.18.0.0/15, left out), when it ended and
-// how many attempts it took to come up. Times are Unix nanoseconds.
+// markers and probes of blaster, 198.18.0.0/15, left out), when its own
+// routes went out, when it ended and how many attempts it took to come up.
+// Times are Unix nanoseconds.
 package main
 
 import (
@@ -34,19 +41,27 @@ import (
 )
 
 var (
-	family = flag.String("family", "ipv4", "ipv4 or vpnv4")
-	local  = flag.String("local", "127.0.0.3", "local address")
-	remote = flag.String("remote", "127.0.0.1:10179", "gobgpd address")
-	id     = flag.String("id", "4.4.4.4", "BGP identifier")
-	routes = flag.Int64("routes", 0, "routes in the table of gobgpd")
-	hold   = flag.Int("hold", 90, "Hold Time to offer, s")
+	family   = flag.String("family", "ipv4", "ipv4 or vpnv4")
+	local    = flag.String("local", "127.0.0.3", "local address")
+	remote   = flag.String("remote", "127.0.0.1:10179", "gobgpd address")
+	id       = flag.String("id", "4.4.4.4", "BGP identifier")
+	routes   = flag.Int64("routes", 0, "routes in the table of gobgpd")
+	hold     = flag.Int("hold", 90, "Hold Time to offer, s")
+	asn      = flag.Uint("as", 400, "AS number")
+	announce = flag.Int("announce", 0, "routes to announce on every session during flap")
+	overlap  = flag.Bool("overlap", false, "announce the prefixes of the routes of blaster, as better paths")
 )
+
+// perUpdate is how many routes of flapper share an UPDATE: they have the
+// same attributes, so a speaker packs them.
+const perUpdate = 500
 
 var blasterRoutes = netip.MustParsePrefix("198.18.0.0/15")
 
 type record struct {
 	Up            int64 `json:"up_unix_nano"`
 	Full          int64 `json:"full_unix_nano,omitempty"`
+	Announced     int64 `json:"announced_unix_nano,omitempty"`
 	Down          int64 `json:"down_unix_nano,omitempty"`
 	Routes        int64 `json:"routes"`
 	Attempts      int   `json:"attempts"`
@@ -56,8 +71,64 @@ type record struct {
 type session struct {
 	s    *speaker.Session
 	done chan struct{}
+	sent chan struct{} // closed once the routes of -announce went out
+	once sync.Once
 	mu   sync.Mutex
 	rec  record
+}
+
+// announce sends the routes of -announce in the background, once per
+// session. Without -announce there is nothing to send.
+func (x *session) announce() {
+	x.once.Do(func() {
+		if *announce == 0 {
+			close(x.sent)
+			return
+		}
+		go func() {
+			// blaster takes 10.0.0.0/24 on, 65536 routes to a first octet
+			first := byte(100)
+			if *overlap {
+				first = 10
+			}
+			nh, _ := bgp.NewPathAttributeNextHop(netip.MustParseAddr(*local))
+			attrs := []bgp.PathAttributeInterface{
+				bgp.NewPathAttributeOrigin(bgp.BGP_ORIGIN_ATTR_TYPE_IGP),
+				// one AS against the two of blaster: the shorter path wins
+				bgp.NewPathAttributeAsPath([]bgp.AsPathParamInterface{
+					bgp.NewAs4PathParam(bgp.BGP_ASPATH_ATTR_TYPE_SEQ, []uint32{uint32(*asn)}),
+				}),
+				nh,
+			}
+			for i := 0; i < *announce; i += perUpdate {
+				var nlri []bgp.PathNLRI
+				for j := i; j < min(i+perUpdate, *announce); j++ {
+					n, _ := bgp.NewIPAddrPrefix(netip.PrefixFrom(netip.AddrFrom4([4]byte{first + byte(j>>16), byte(j >> 8), byte(j), 0}), 24))
+					nlri = append(nlri, bgp.PathNLRI{NLRI: n})
+				}
+				if x.s.Send(bgp.NewBGPUpdateMessage(nil, attrs, nlri)) != nil {
+					return // the session ended
+				}
+			}
+			if x.s.Flush() != nil {
+				return
+			}
+			x.mu.Lock()
+			x.rec.Announced = time.Now().UnixNano()
+			x.mu.Unlock()
+			close(x.sent)
+		}()
+	})
+}
+
+// from is when the time to drop the session starts: when its routes went
+// out, or when it came up if it announces none.
+func (x *session) from() time.Time {
+	r := x.snapshot()
+	if r.Announced != 0 {
+		return time.Unix(0, r.Announced)
+	}
+	return time.Unix(0, r.Up)
 }
 
 func (x *session) snapshot() record {
@@ -119,9 +190,10 @@ func prefix(n bgp.NLRI) netip.Prefix {
 // deadline; nil if the deadline passed.
 func connect(fam bgp.Family, retry time.Duration, deadline time.Time) *session {
 	for attempts := 1; ; attempts++ {
-		s, err := speaker.Dial(*local, *remote, 300, netip.MustParseAddr(*id), []bgp.Family{fam})
+		s, err := speaker.Dial(*local, *remote, uint32(*asn), netip.MustParseAddr(*id), []bgp.Family{fam})
 		if err == nil {
-			x := &session{s: s, done: make(chan struct{}), rec: record{Up: time.Now().UnixNano(), Attempts: attempts}}
+			x := &session{s: s, done: make(chan struct{}), sent: make(chan struct{}),
+				rec: record{Up: time.Now().UnixNano(), Attempts: attempts}}
 			go x.read()
 			return x
 		}
@@ -139,6 +211,9 @@ func main() {
 	if *family == "vpnv4" {
 		fam = bgp.RF_IPv4_VPN
 	}
+	if *announce > 0 && fam != bgp.RF_IPv4_UC {
+		log.Fatal("-announce needs -family ipv4")
+	}
 	cur := connect(fam, 100*time.Millisecond, time.Now().Add(time.Minute))
 	if cur == nil {
 		log.Fatal("no session with gobgpd in a minute")
@@ -155,13 +230,20 @@ func main() {
 			end := time.Now().Add(seconds(secs))
 			var done []*session
 			for cur != nil && time.Now().Before(end) {
-				wait := time.Until(end)
+				cur.announce()
+				var drop <-chan time.Time // nil: keep the session
 				if interval > 0 {
-					wait = min(wait, time.Until(time.Unix(0, cur.snapshot().Up).Add(seconds(interval))))
+					select {
+					case <-cur.sent:
+						drop = time.After(time.Until(cur.from().Add(seconds(interval))))
+					case <-cur.done:
+					case <-time.After(time.Until(end)):
+					}
 				}
 				select {
 				case <-cur.done:
-				case <-time.After(wait):
+				case <-drop:
+				case <-time.After(time.Until(end)):
 				}
 				if !time.Now().Before(end) {
 					break

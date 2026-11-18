@@ -53,6 +53,7 @@ BIN = ROOT / "work" / "bin"
 DUT_MEMSTATS = "http://127.0.0.1:10160/debug/pprof/heap?debug=1"
 DUT_PROFILE = "http://127.0.0.1:10160/debug/pprof/profile?seconds={}"
 SINK_HTTP_PORT = 10180
+FLAPPER_AS = 400
 AFI_SAFI = {"ipv4": "ipv4-unicast", "vpnv4": "l3vpn-ipv4-unicast"}
 MEMSTATS = {"TotalAlloc": "total_alloc", "Mallocs": "mallocs", "NumGC": "num_gc", "HeapInuse": "heap_inuse"}
 SETTLE_STATS = {"HeapAlloc": "heap_alloc", "HeapInuse": "heap_inuse", "HeapIdle": "heap_idle",
@@ -69,7 +70,7 @@ DEFAULTS = {
     "communities": {"standard": 0, "extended": 0, "large": 0, "order": "sorted", "seed": 1, "unique": False, "groups": 0},
     "storm": {"rounds": 0, "resend": "same"},
     "restart": {"pause": 0, "restart_time": 15, "llgr_stale_time": 86400, "receiver_llgr": False},
-    "flap": {"seconds": 0, "interval": 0, "retry": 1, "probe_rate": 100},
+    "flap": {"seconds": 0, "interval": 0, "retry": 1, "probe_rate": 100, "announce": 0, "overlap": False},
     "runtime": {"gomaxprocs": 2, "gogc": "", "gomemlimit": "", "gobgpd_cpus": "0,1", "sender_cpus": "2,3", "receiver_cpus": "2,3",
                 "cpu_profile_seconds": 0, "log_level": "warn"},
 }
@@ -173,6 +174,15 @@ def load_scenario(path):
             fail("[flap] does not go with [restart] or receiver_stall")
         if not 0 < fl["probe_rate"] * fl["seconds"] <= 65536:
             fail("flap.probe_rate * flap.seconds must be 1 to 65536: every probe is a /32 of its own in 198.19.0.0/16")
+        if fl["announce"] and choice(cfg["family"], list(AFI_SAFI), "family") != ["ipv4"]:
+            fail("flap.announce needs family = \"ipv4\"")
+        if fl["overlap"] and fl["announce"] > cfg["routes"]:
+            fail("flap.overlap takes the prefixes of the table: flap.announce must be at most routes")
+        # the table takes 10.0.0.0/24 on and the own routes of A 100.0.0.0/24 on,
+        # 65536 routes to a first octet; they must not meet, nor reach 127.0.0.0/8
+        if fl["announce"] and not fl["overlap"] and (
+                10 + (cfg["routes"] - 1) // 65536 >= 100 or 100 + (fl["announce"] - 1) // 65536 >= 127):
+            fail("routes or flap.announce too many: the table and the own routes of A would overlap")
     if cfg["receiver_stall"] and (not rounds or any(x > 0 for x in pauses)):
         fail("receiver_stall needs storm.rounds > 0 and no [restart]")
     resends = choice(cfg["storm"]["resend"], list(RESENDS), "storm.resend") if rounds else ["same"]
@@ -202,7 +212,7 @@ def label(sc):
             + ((f"_flap{f['interval']:g}s" if f["interval"] else "_steady") if (f := sc["flap"]) else ""))
 
 
-def dut_config(family, sinks, neighbor_config="", restart=None):
+def dut_config(family, sinks, neighbor_config="", restart=None, flapper=None):
     """The config from live/dut.toml.tmpl with a neighbor per receiver;
     neighbor_config is more lines for the config of every neighbor. With
     restart (scenario [restart]) every neighbor has graceful restart with
@@ -224,7 +234,10 @@ def dut_config(family, sinks, neighbor_config="", restart=None):
     i = tmpl.index("[[neighbors]]", tmpl.index("[[neighbors]]") + 1)
     head, sink_block = tmpl[:i], tmpl[i:]
     head = head.replace('"{sink_addr}"', ", ".join(f'"{a}"' for a in sinks))
-    return head + "\n".join(sink_block.replace("{sink_addr}", a) for a in sinks)
+    # the flapping peer A has an AS of its own: a receiver in the AS of A
+    # would not get its routes, they would carry the AS of the receiver
+    return head + "\n".join(sink_block.replace("{sink_addr}", a).replace(
+        "{peer_as}", str(FLAPPER_AS if a == flapper else 300)) for a in sinks)
 
 
 def wait_for(cond, timeout=30):
@@ -247,8 +260,9 @@ class Run:
         flap = sc["flap"]
         addrs = sink_addrs(args.sink_addr, sc["receivers"] + (1 if flap else 0))
         restart = sc["restart"]
-        conf.write_text(dut_config(family, addrs, args.neighbor_config, restart))
-        self.a_addr, addrs = (addrs[-1], addrs[:-1]) if flap else (None, addrs)
+        self.a_addr = addrs[-1] if flap else None
+        conf.write_text(dut_config(family, addrs, args.neighbor_config, restart, self.a_addr))
+        addrs = addrs[:-1] if flap else addrs
         hold = ["-hold", str(sc["hold_time"])]
         self.workdir = workdir
         cmd = [str(args.gobgpd), "-f", str(conf), "--api-hosts", "127.0.0.1:10150",
@@ -301,7 +315,8 @@ class Run:
         if sc["flap"]:
             self.flapper = subprocess.Popen(
                 receivers + [str(BIN / "flapper"), "-family", family, "-local", self.a_addr, "-remote", "127.0.0.1:10179",
-                             "-routes", str(sc["routes"])] + hold,
+                             "-routes", str(sc["routes"]), "-as", str(FLAPPER_AS), "-announce", str(sc["flap"]["announce"])]
+                + (["-overlap"] if sc["flap"]["overlap"] else []) + hold,
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.log, text=True)
             if not (line := self.flapper.stdout.readline()) or not json.loads(line)["ready"]:
                 raise RuntimeError("flapper did not come up, see dut.log")
@@ -547,8 +562,9 @@ class Run:
     def flap(self, f):
         """The sender sends f["probe_rate"] probe routes a second for
         f["seconds"] seconds; meanwhile peer A (flapper) stays up or, with
-        f["interval"], drops its session that many seconds after it came up
-        and connects again, every f["retry"] seconds while gobgpd refuses.
+        f["interval"], drops its session that many seconds after it came up,
+        or after its own f["announce"] routes went out, and connects again,
+        every f["retry"] seconds while gobgpd refuses.
         Then the markers. Each probe carries the time it was sent; the first
         receiver records when it came. Times are seconds from the start."""
         samples, stop = [], threading.Event()
@@ -608,6 +624,12 @@ class Run:
                 except (RuntimeError, OSError):
                     pass
             kept = alive()
+            try:
+                c = sink(0)
+                c = {"announced": c["nlri"] - before["sinks"][0]["nlri"],
+                     "withdrawn": c["withdrawn"] - before["sinks"][0]["withdrawn"]}
+            except OSError:
+                c = None  # gobgpd dropped the session of the receiver
             t = self.proc.cpu_times()
             after = {"cpu": t.user + t.system, "rss": self.proc.memory_info().rss}
         finally:
@@ -632,8 +654,12 @@ class Run:
                             "over_1s": sum(x > 1 for x in lat), "over_100ms": sum(x > 0.1 for x in lat)},
                 "probe_series": series, "series_fields": ["sent", "latency"],
                 "sessions": [{"up": since(x["up_unix_nano"]), "full": since(x.get("full_unix_nano")),
+                              "announced": since(x.get("announced_unix_nano")),
                               "down": since(x.get("down_unix_nano")), "routes": x["routes"], "attempts": x["attempts"],
                               "dropped_by_peer": x.get("dropped_by_peer", False)} for x in sessions],
+                # what the routes of A cost the receiver: the routes it got
+                # announced and withdrawn, the probes and markers left out
+                "receiver_routes": c,
                 "peers_kept": kept,
                 "peers_down": self.peer_events()[1],
                 "rss_peak": max([x[1] for x in samples] + [after["rss"]]), "rss_end": after["rss"],
@@ -812,7 +838,8 @@ def main():
                       f"p99 {lt['p99'] or 0:.3f}s max {lt['max'] or 0:.3f}s, over 1 s {lt['over_1s']}; A sessions {len(ss)}, "
                       f"full table in {min(dumps, default=0):.1f}-{max(dumps, default=0):.1f}s; peers kept {fl['peers_kept']}, "
                       f"other sessions down {fl['peers_down']}; "
-                      f"peak rss {fl['rss_peak'] / 2**20:.0f} MiB, cpu {fl['cpu']:.1f}s", flush=True)
+                      + (f"C got +{rc['announced']}/-{rc['withdrawn']}; " if (rc := fl["receiver_routes"]) else "")
+                      + f"peak rss {fl['rss_peak'] / 2**20:.0f} MiB, cpu {fl['cpu']:.1f}s", flush=True)
                 continue
             if rs := res["restart"]:
                 w = rs["windows"]

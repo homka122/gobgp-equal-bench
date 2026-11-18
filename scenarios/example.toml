@@ -55,10 +55,15 @@ resend = "same"              # what a round sends for every route:
 [flap]
 seconds    = 0               # how long the phase lasts
 interval   = 0               # A drops its session, without a NOTIFICATION, this many seconds
-                             # after it came up, and connects again; 0: A stays up
+                             # after it came up (after its routes went out, with announce),
+                             # and connects again; 0: A stays up
 retry      = 1               # seconds between the attempts of A while gobgpd refuses it
 probe_rate = 100             # probe routes the sender announces per second, each a /32 of its
                              # own in 198.19.0.0/16; at most 65536 in the phase
+announce   = 0               # routes A announces on every session in the phase, ipv4 only;
+                             # with interval, A drops its session that long after they went out
+overlap    = false           # true: A announces the prefixes of the table with a shorter AS_PATH,
+                             # so its routes become the best paths; false: prefixes of its own
 
 # How gobgpd and the test peers run.
 [runtime]
